@@ -1,0 +1,71 @@
+user_agent: 'Mozilla/5.0 (Linux; Android 9; AFTMM Build/PS7233; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/118.0.0.0 Mobile Safari/537.36'
+
+endpoints:
+  movie: 'https://discover.hulu.com/content/v5/hubs/movie/{id}?limit=999&schema=9&referralHost=production'
+  series: 'https://discover.hulu.com/content/v5/hubs/series/{id}?limit=999&schema=9&referralHost=production'
+  season: 'https://discover.hulu.com/content/v5/hubs/series/{id}/season/{season}?limit=999&schema=9&referralHost=production'
+  manifest: 'https://play.hulu.com/v6/playlist'
+
+device:
+  PC:
+    code: '159'
+    key: '6ebfc84f3c304217b20fd9a66cb5957f'
+
+  Chrome:
+    code: '190'
+    key: '6ebfc84f3c304217b20fd9a66cb5957f'
+
+  FireTV:
+    code: '188'
+    key: 'ca8d311a734854871623d906b968a073'
+
+  FireTV4K:
+    code: '208'
+    key: 'fa49ca06261fe41b6e56fa2d24b4f295'
+
+  Shield:
+    code: '109'
+    key: 'd0f4adc1d8a774256acb00c0fff46f5f'
+
+  Shield2:
+    code: '142'
+    key: 'd6bdf1f49c73db36f465536162ccc830'
+
+codecs:
+  video_selection: 'ONE'
+  audio_selection: 'ALL'
+
+  video:
+    - type: 'H265'
+      profile: 'MAIN_10'
+      width: 3840
+      height: 2160
+      framerate: 60
+      level: '5.1'
+      tier: 'MAIN'
+
+    - type: 'H264'
+      profile: 'HIGH'
+      width: 1920
+      height: 1080
+      framerate: 60
+      level: '5.2'
+
+  audio:
+    - type: 'AAC'
+    
+    - type: 'EC3'
+
+drm:
+  selection_mode: 'ONE'
+  hdcp: true
+
+  schemas_wv:
+    - type: 'WIDEVINE'
+      version: 'MODULAR'
+      security_level: 'L1'
+
+  schemas_pr:
+    - type: 'PLAYREADY'
+      version: 'V2'
+      security_level: 'SL3000'

@@ -6,30 +6,9 @@ endpoints:
   season: 'https://discover.hulu.com/content/v5/hubs/series/{id}/season/{season}?limit=999&schema=9&referralHost=production'
   manifest: 'https://play.hulu.com/v6/playlist'
 
-device:
-  PC:
-    code: '159'
-    key: '6ebfc84f3c304217b20fd9a66cb5957f'
-
-  Chrome:
-    code: '190'
-    key: '6ebfc84f3c304217b20fd9a66cb5957f'
-
-  FireTV:
-    code: '188'
-    key: 'ca8d311a734854871623d906b968a073'
-
-  FireTV4K:
-    code: '208'
-    key: 'fa49ca06261fe41b6e56fa2d24b4f295'
-
-  Shield:
-    code: '109'
-    key: 'd0f4adc1d8a774256acb00c0fff46f5f'
-
-  Shield2:
-    code: '142'
-    key: 'd6bdf1f49c73db36f465536162ccc830'
+device_ids:
+  new: 210
+  old: 166
 
 codecs:
   video_selection: 'ONE'

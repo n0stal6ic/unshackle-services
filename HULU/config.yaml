@@ -32,7 +32,6 @@ codecs:
 
   audio:
     - type: 'AAC'
-    
     - type: 'EC3'
 
 drm:

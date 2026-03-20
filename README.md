@@ -20,5 +20,5 @@ Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle).
 
 Thanks to the following people for their contributions and suggestions:
 
-- FairTrade - OG KNPY Script
-- iAmAwesom3 - Dynamic streams for PBSK
+- FairTrade - Original KNPY Script
+- iAmAwesom3 - Dynamic stream selection for PBSK

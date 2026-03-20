@@ -26,8 +26,6 @@ class PBSK(Service):
 
     TITLE_RE = r"^(?:https?://(?:www\.)?pbskids\.org)?(?P<path>/videos/watch/[^?#\s]+)"
     GEOFENCE = ("US",)
-    _HLS_PROFILES = ("hls-16x9-1080p", "hls-16x9-720p")
-    _DASH_DRM_PROFILES = ("dash-16x9-1080p-drm", "dash-16x9-720p-drm")
 
     @staticmethod
     @click.command(name="PBSK", short_help="https://pbskids.org")
@@ -148,23 +146,46 @@ class PBSK(Service):
         else:
             return self._get_clear_tracks(title, videos)
 
-    def _pick_stream(self, videos: list[dict], preferred_profiles: tuple[str, ...]) -> Optional[dict]:
-        seen_urls: set[str] = set()
-        for profile in preferred_profiles:
-            for video in videos:
-                if video.get("profile") == profile:
-                    url = video.get("url", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        return video
-        return None
-
     def _resolve_redirect(self, url: str) -> str:
         resp = self.session.head(url, allow_redirects=True)
         return str(resp.url)
 
+    @staticmethod
+    def _get_profile_height(profile: str) -> int:
+        match = re.search(r"-(\d+)p(?:-|$)", profile)
+        return int(match.group(1)) if match else -1
+
+    def _pick_best_stream(
+        self,
+        videos: list[dict],
+        prefix: str,
+        suffix: str = "",
+        required_key: Optional[str] = None,
+    ) -> Optional[dict]:
+        candidates: list[dict] = []
+        seen_urls: set[str] = set()
+
+        for video in videos:
+            profile = str(video.get("profile") or "")
+            url = video.get("url", "")
+            if not profile.startswith(prefix):
+                continue
+            if suffix and not profile.endswith(suffix):
+                continue
+            if required_key and not video.get(required_key):
+                continue
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            candidates.append(video)
+
+        if not candidates:
+            return None
+
+        return max(candidates, key=lambda v: self._get_profile_height(str(v.get("profile") or "")))
+
     def _get_clear_tracks(self, title: Title_T, videos: list[dict]) -> Tracks:
-        video = self._pick_stream(videos, self._HLS_PROFILES)
+        video = self._pick_best_stream(videos, prefix="hls-")
         if not video:
             raise RuntimeError("No HLS stream found.")
 
@@ -174,7 +195,7 @@ class PBSK(Service):
         return HLS.from_url(url=stream_url, session=self.session).to_tracks(language=title.language)
 
     def _get_drm_tracks(self, title: Title_T, videos: list[dict]) -> Tracks:
-        video = self._pick_stream(videos, self._DASH_DRM_PROFILES)
+        video = self._pick_best_stream(videos, prefix="dash-", suffix="-drm", required_key="widevine_license")
         if not video:
             raise RuntimeError("No Widevine DASH stream found.")
 

@@ -1,10 +1,20 @@
 # unshackle-services
-Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle)
+Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle).
 
-## Unfinished:
-KNPY (Kanopy): Added HSL Support. Unfinished cookies.
+## Services
 
-HULU (Hulu): Fixed errors. Unfinished audio streams.
+### Finished
+| Tag | Service |
+|-----|---------|
+| PBSK | PBS Kids |
 
-## Finished:
-PBSK (PBS Kids)
+### In Progress
+| Tag | Service | Notes |
+|-----|---------|-------|
+| KNPY | Kanopy | HLS support added, cookies unfinished |
+| HULU | Hulu | Errors fixed, audio streams unfinished |
+
+## Contributors
+Thanks to the following people for their contributions and suggestions:
+FairTrade - OG KNPY Script
+iAmAwesom3 - Dynamic streams for PBSK

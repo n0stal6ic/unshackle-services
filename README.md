@@ -1,11 +1,10 @@
 # unshackle-services
 Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle)
 
-Unfinished:
+## Unfinished:
 KNPY (Kanopy): Added HSL Support. Unfinished cookies.
-HULU (Hulu): Fixed errors. Unfinished list all audio steams.
 
-Finished:
-PBSK (PBS Kids): Works.
+HULU (Hulu): Fixed errors. Unfinished audio steams.
 
-Enjoy! :)
+## Finished:
+PBSK (PBS Kids)

@@ -300,7 +300,10 @@ class PBS(Service):
         if not r.ok:
             self.log.warning(f"Unable to find specials for '{show_slug}': {r.status_code}.")
             return []
-        return r.json()
+        return [
+            sp for sp in r.json()
+            if sp.get("slug") != sp.get("parent", {}).get("slug")
+        ]
 
     def _fetch_season_episodes(self, show_slug: str, season_cid: str) -> list[dict]:
         url = self.config["endpoints"]["show_episodes"].format(

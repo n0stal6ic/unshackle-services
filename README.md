@@ -7,5 +7,5 @@ Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle).
 |-----|---------|-------|
 | PBS | PBS | Finished |
 | PBSK | PBS Kids | Finished |
-| KNPY | Kanopy | HLS support added, cookies unfinished |
-| HULU | Hulu | Errors fixed, audio/subtitle streams unfinished |
+| KNPY | Kanopy | Unfinished |
+| HULU | Hulu | Unfinished |

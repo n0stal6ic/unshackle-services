@@ -5,8 +5,8 @@ Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle).
 
 | Tag | Service | Security | Authorization | Geofence | Notes |
 |-----|---------|-------|-------|-------|-------|
-| PBS | PBS | None | Cookies | US | Finished |
-| PBSK | PBS Kids | FHD@L3 | None | US | Finished |
-| XUMO | XUMO Play | None | None | US | Finished |
-| HULU | Hulu | UHD@L1, UHD@SL3000 | Cookies | US | Unfinished |
-| KNPY | Kanopy | FHD@L3 | Cookies, Credentials | US, CA, AU, NZ, GB | Unfinished |
+| PBS | [PBS](https://www.pbs.org/) | None | Cookies | US | Finished |
+| PBSK | [PBS Kids](https://pbskids.org/) | FHD@L3 | None | US | Finished |
+| XUMO | [XUMO Play](https://play.xumo.com/) | None | None | US | Finished |
+| HULU | [Hulu](https://www.hulu.com) | UHD@L1, UHD@SL3000 | Cookies | US | Unfinished |
+| KNPY | [Kanopy](https://www.kanopy.com/) | FHD@L3 | Cookies, Credentials | US, CA, AU, NZ, GB | Unfinished |

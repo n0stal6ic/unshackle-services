@@ -7,5 +7,6 @@ Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle).
 |-----|---------|-------|
 | PBS | PBS | Finished |
 | PBSK | PBS Kids | Finished |
+| XUMO | XUMO Play | Finished |
 | HULU | Hulu | Unfinished |
 | KNPY | Kanopy | Unfinished |

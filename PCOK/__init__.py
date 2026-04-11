@@ -21,7 +21,7 @@ from unshackle.core.tracks import Chapters, Tracks, Video
 
 class PCOK(Service):
     """
-    Service Script for Peacock TV (https://peacocktv.com)
+    Service code for Peacock TV (https://peacocktv.com)
     
     Author: n0stal6ic
     Authorization: Cookies, Credentials

@@ -35,6 +35,8 @@ class PCOK(Service):
         r"(?:https?://(?:www\.)?peacocktv\.com/watch/asset)?(?P<id>/tv/[a-z0-9_./-]+/[a-f0-9-]{36})",
         r"(?:https?://(?:www\.)?peacocktv\.com/watch/asset)?(?P<id>/tv/[a-z0-9_./-]+/\d+)",
         r"(?:https?://(?:www\.)?peacocktv\.com/watch/asset)?(?P<id>/news/[a-z0-9_./-]+/[a-f0-9-]{36})",
+        r"(?:https?://(?:www\.)?peacocktv\.com/watch/asset)?(?P<id>/sports/[a-z0-9_./-]+/[a-f0-9-]{36})",
+        r"(?:https?://(?:www\.)?peacocktv\.com/watch/asset)?(?P<id>/sports/[a-z0-9_./-]+/\d+)",
         r"(?:https?://(?:www\.)?peacocktv\.com/watch/asset)?(?P<id>/-/[a-z0-9_./-]+/\d+)",
         r"(?:https?://(?:www\.)?peacocktv\.com/stream-tv/)?(?P<id>[a-z0-9-]+)$",
     ]
@@ -42,30 +44,29 @@ class PCOK(Service):
     @staticmethod
     @click.command(name="PCOK", short_help="https://peacocktv.com")
     @click.argument("title", type=str)
-    @click.option("-m", "--movie", is_flag=True, default=False, help="Title is a movie.")
     @click.pass_context
     def cli(ctx, **kwargs):
         return PCOK(ctx, **kwargs)
 
-    def __init__(self, ctx, title: str, movie: bool):
+    def __init__(self, ctx, title: str):
         super().__init__(ctx)
 
         self.title = title
-        self.movie = movie
+        self.movie = False
 
         range_param = ctx.parent.params.get("range_")
         self.range = range_param[0].name if range_param else "SDR"
 
         vcodec_param = ctx.parent.params.get("vcodec")
-        self.vcodec = vcodec_param if vcodec_param else "H264"
+        self.vcodec = vcodec_param[0] if vcodec_param else "h264"
 
         self.profile_name = ctx.parent.params.get("profile") or "default"
 
-        prof_key = self.config["client"].get("profile", "tv")
+        self.prof_key = self.config["client"].get("profile", "tv")
         profiles = self.config.get("profiles", {})
-        if prof_key not in profiles:
-            raise ValueError(f"Unknown device profile {prof_key!r}. Valid: {list(profiles)}")
-        self.prof = profiles[prof_key]
+        if self.prof_key not in profiles:
+            raise ValueError(f"Unknown device profile {self.prof_key!r}. Valid: {list(profiles)}")
+        self.prof = profiles[self.prof_key]
         self.hmac_key: bytes = self.prof["hmac_key"].encode()
 
         try:
@@ -113,9 +114,9 @@ class PCOK(Service):
                     .get("categoryErrors", [{}])[0]
                     .get("code", "unknown")
                 )
-                raise EnvironmentError(f"Login failed: {code}")
             except (ValueError, KeyError, IndexError):
-                raise EnvironmentError(f"Login failed with HTTP {r.status_code}.")
+                code = f"HTTP {r.status_code}"
+            raise EnvironmentError(f"Login failed: {code}")
 
     def _sky_headers(self, extra: Optional[dict] = None) -> dict:
         h = {
@@ -165,8 +166,7 @@ class PCOK(Service):
         return f'SkyOTT client="{sdk}",signature="{sig}",timestamp="{ts}",version="1.0"'
 
     def _get_tokens(self) -> dict:
-        prof_key = self.config["client"].get("profile", "tv")
-        cache_key = f"tokens_{self.profile_name}_{prof_key}"
+        cache_key = f"tokens_{self.profile_name}_{self.prof_key}"
         cache = self.cache.get(cache_key)
 
         if cache and cache.data:
@@ -328,7 +328,7 @@ class PCOK(Service):
         attrs = title.data["attributes"]
         formats = attrs.get("formats", {})
 
-        want_uhd = self.vcodec == "H265"
+        want_uhd = self.vcodec.lower() in ("hevc", "h.265")
         if want_uhd and "UHD" in formats:
             content_id = formats["UHD"]["contentId"]
         elif "HD" in formats:
@@ -353,11 +353,21 @@ class PCOK(Service):
                 "container": "ISOBMFF",
                 "transport": "DASH",
                 "acodec": "AAC",
-                "vcodec": self.vcodec,
+                "vcodec": "H265" if want_uhd else "H264",
             }
         ]
 
-        sky_h = self._sky_headers({"X-SkyOTT-UserToken": self.tokens["userToken"]})
+        sky_h = {
+            "X-SkyOTT-Agent": ".".join([
+                self.config["client"]["proposition"],
+                self.prof["device"],
+                self.prof["platform"],
+            ]).lower(),
+            "X-SkyOTT-PinOverride": "false",
+            "X-SkyOTT-Provider": self.config["client"]["provider"],
+            "X-SkyOTT-Territory": self.config["client"]["territory"],
+            "X-SkyOTT-UserToken": self.tokens["userToken"],
+        }
         body = json.dumps(
             {
                 "device": {

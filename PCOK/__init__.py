@@ -22,7 +22,7 @@ from unshackle.core.tracks import Chapters, Tracks, Video
 class PCOK(Service):
     """
     Service code for Peacock TV (https://peacocktv.com)
-    
+
     Author: n0stal6ic
     Authorization: Cookies, Credentials
     Geofence: US
@@ -76,7 +76,6 @@ class PCOK(Service):
             self.use_playready = False
 
         self.tokens: Optional[dict] = None
-        self.license_url: Optional[str] = None
 
     def authenticate(self, cookies: Optional[CookieJar] = None, credential: Optional[Credential] = None) -> None:
         super().authenticate(cookies, credential)
@@ -301,6 +300,7 @@ class PCOK(Service):
                     name=res["attributes"]["title"],
                     year=res["attributes"].get("year"),
                     data=res,
+                    description=res["attributes"].get("synopsis"),
                 )
             ])
 
@@ -320,6 +320,7 @@ class PCOK(Service):
                 name=ep["attributes"].get("title"),
                 year=ep["attributes"].get("year"),
                 data=ep,
+                description=ep["attributes"].get("synopsis"),
             )
             for ep in episodes
         ])
@@ -403,7 +404,7 @@ class PCOK(Service):
                 f"Playout error: {manifest.get('description', 'unknown')} [{manifest['errorCode']}]"
             )
 
-        self.license_url = manifest["protection"]["licenceAcquisitionUrl"]
+        license_url = manifest["protection"]["licenceAcquisitionUrl"]
 
         endpoints = manifest["asset"]["endpoints"]
         dash_url = next(
@@ -425,17 +426,23 @@ class PCOK(Service):
 
         for audio in tracks.audio:
             if audio.language.territory == "AD":
-                audio.language.territory = None
+                audio.descriptive = True
+                audio.language = Language.make(language=audio.language.language)
+                audio.name = None
+
+        for track in tracks:
+            track.data["license_url"] = license_url
 
         return tracks
 
     def get_chapters(self, title: Title_T) -> Chapters:
         return Chapters()
 
-    def _license_request(self, challenge: bytes) -> bytes:
-        path = urlparse(self.license_url).path
+    def _license_request(self, challenge: bytes, track: AnyTrack) -> bytes:
+        license_url = track.data["license_url"]
+        path = urlparse(license_url).path
         r = self.session.post(
-            url=self.license_url,
+            url=license_url,
             data=challenge,
             headers={
                 "X-Sky-Signature": self._sign("POST", path, {}, challenge),
@@ -445,11 +452,11 @@ class PCOK(Service):
         return r.content
 
     def get_widevine_license(self, *, challenge: bytes, title: Title_T, track: AnyTrack) -> Optional[bytes]:
-        if not self.license_url:
+        if not track.data.get("license_url"):
             return None
-        return self._license_request(challenge)
+        return self._license_request(challenge, track)
 
     def get_playready_license(self, *, challenge: bytes, title: Title_T, track: AnyTrack) -> Optional[bytes]:
-        if not self.license_url:
+        if not track.data.get("license_url"):
             return None
-        return self._license_request(challenge)
+        return self._license_request(challenge, track)

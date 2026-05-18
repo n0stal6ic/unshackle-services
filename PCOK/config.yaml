@@ -27,7 +27,12 @@ client:
 endpoints:
   login:    https://rango.id.peacocktv.com/signin/service/international
   personas: https://persona.id.peacocktv.com/persona-store/personas
-  tokens:   https://ovp.peacocktv.com/auth/tokens
-  me:       https://ovp.peacocktv.com/auth/users/me
+  tokens:   https://play.ovp.peacocktv.com/auth/tokens
+  me:       https://play.ovp.peacocktv.com/auth/users/me
   node:     https://atom.peacocktv.com/adapter-calypso/v3/query/node
-  vod:      https://ovp.peacocktv.com/video/playouts/vod
+  vod:      https://play.ovp.peacocktv.com/video/playouts/vod
+
+legacy_endpoints:
+  tokens: https://ovp.peacocktv.com/auth/tokens
+  me:     https://ovp.peacocktv.com/auth/users/me
+  vod:    https://ovp.peacocktv.com/video/playouts/vod

@@ -171,6 +171,7 @@ class AMZN(Service):
         self.amanifest = amanifest
         self.aquality = aquality
         self.manifest_type = (manifest_type or "DASH").upper()
+        self.manifest_type_source = ctx.get_parameter_source("manifest_type")
         self.drm_system = drm_system
         self.no_true_region = no_true_region
         self.playlisted = playlisted
@@ -198,6 +199,16 @@ class AMZN(Service):
         self.cdm = ctx.obj.cdm
         self.profile = ctx.obj.profile
         self.playready = self.drm_system == "playready"
+        if ctx.get_parameter_source("drm_system") != ParameterSource.COMMANDLINE:
+            try:
+                from unshackle.core.cdm.detect import is_playready_cdm, is_widevine_cdm
+                if is_widevine_cdm(self.cdm):
+                    self.playready = False
+                elif is_playready_cdm(self.cdm):
+                    self.playready = True
+            except Exception:
+                pass
+        self.log.info(f" + DRM system: {'PlayReady' if self.playready else 'Widevine'}")
 
         self.region: dict[str, str] = {}
         self.endpoints: dict[str, str] = {}
@@ -582,6 +593,15 @@ class AMZN(Service):
             return "CVBR+CBR"
         return self.orig_bitrate
 
+    def _bitrate_candidates(self, codec: str) -> list:
+        if self.bitrate_source == ParameterSource.COMMANDLINE:
+            return [self.orig_bitrate]
+        cands = [self._bitrate_for_codec(codec)]
+        for b in ("CBR", "CVBR"):
+            if b not in cands:
+                cands.append(b)
+        return cands
+
     def get_tracks(self, title: Title_T) -> Tracks:
         if self.chapters_only:
             return Tracks([])
@@ -593,51 +613,62 @@ class AMZN(Service):
         video_protocol = "SmoothStreaming" if self.manifest_type == "ISM" else "DASH"
 
         def _fetch_for_codec(codec: str) -> dict:
-            bmode = self._bitrate_for_codec(codec)
-            m = self.get_manifest(
-                title, video_codec=codec, bitrate_mode=bmode, quality=self.vquality,
-                hdr=effective_range, ignore_errors=True, protocol=video_protocol,
-                use_playlisted=self.playlisted,
-            )
-            if (self.range == "DV" or is_hybrid) and not m.get("vodPlaybackUrls"):
+            last: dict = {}
+            for bmode in self._bitrate_candidates(codec):
                 m = self.get_manifest(
                     title, video_codec=codec, bitrate_mode=bmode, quality=self.vquality,
-                    hdr="HDR10", ignore_errors=True, protocol=video_protocol,
+                    hdr=effective_range, ignore_errors=True, protocol=video_protocol,
                     use_playlisted=self.playlisted,
                 )
-            if not self._usable_manifest(m) and self.device_token and not self.playlisted:
-                fb = self.get_manifest(
-                    title, video_codec=codec, bitrate_mode=bmode, quality=self.vquality,
-                    hdr=effective_range, ignore_errors=True, protocol=video_protocol,
-                    use_playlisted=True,
-                )
-                if self._usable_manifest(fb):
-                    m = fb
-            return m
+                if (self.range == "DV" or is_hybrid) and not m.get("vodPlaybackUrls"):
+                    m = self.get_manifest(
+                        title, video_codec=codec, bitrate_mode=bmode, quality=self.vquality,
+                        hdr="HDR10", ignore_errors=True, protocol=video_protocol,
+                        use_playlisted=self.playlisted,
+                    )
+                if not self._usable_manifest(m) and self.device_token and not self.playlisted:
+                    fb = self.get_manifest(
+                        title, video_codec=codec, bitrate_mode=bmode, quality=self.vquality,
+                        hdr=effective_range, ignore_errors=True, protocol=video_protocol,
+                        use_playlisted=True,
+                    )
+                    if self._usable_manifest(fb):
+                        m = fb
+                if self._usable_manifest(m):
+                    self.bitrate = bmode
+                    return m
+                last = m
+            return last
         requested_codec = self.requested_vcodec
         self.vcodec = requested_codec
         self.bitrate = self._bitrate_for_codec(requested_codec)
         codec_chain = self._codec_fallback_chain(requested_codec)
-        manifest = {}
         effective_vcodec = requested_codec
-        for codec in codec_chain:
-            if len(codec_chain) > 1:
-                self.log.info(f" + Requesting {codec} video manifest...")
-            manifest = _fetch_for_codec(codec)
-            if self._usable_manifest(manifest):
-                if codec != requested_codec:
-                    self.log.warning(f" - {requested_codec} unavailable for this title; using {codec}.")
-                effective_vcodec = codec
-                self.vcodec = codec
-                self.bitrate = self._bitrate_for_codec(codec)
-                self._sync_vcodec_filter(codec)
-                break
-            if len(codec_chain) > 1:
-                self.log.warning(f" - {codec} not available for this title.")
+
+        def _run_chain() -> dict:
+            nonlocal effective_vcodec
+            mani: dict = {}
+            for codec in codec_chain:
+                if len(codec_chain) > 1:
+                    self.log.info(f" + Requesting {codec} video manifest...")
+                mani = _fetch_for_codec(codec)
+                if self._usable_manifest(mani):
+                    if codec != requested_codec:
+                        self.log.warning(f" - {requested_codec} unavailable for this title; using {codec}.")
+                    effective_vcodec = codec
+                    self.vcodec = codec
+                    self._sync_vcodec_filter(codec)
+                    return mani
+                if len(codec_chain) > 1:
+                    self.log.warning(f" - {codec} not available for this title.")
+            return mani
+
+        manifest = _run_chain()
 
         if not self._usable_manifest(manifest):
             self.log.error(
-                f" - No usable manifest for this title with any codec ({', '.join(codec_chain)})."
+                f" - No usable manifest for this title with any codec ({', '.join(codec_chain)}). "
+                "Re-run with -d/--debug to see the Amazon error."
             )
             raise SystemExit(1)
 
@@ -799,13 +830,13 @@ class AMZN(Service):
                     _atmos_tracks = [x for x in uhd_tracks.audio if (x.bitrate or 0) >= 448000 and (x.channels or 0) >= 6]
                     if _atmos_tracks:
                         _best_kbps = max((x.bitrate or 0) for x in _atmos_tracks) // 1000
-                        self.log.info(f" + Added {len(_atmos_tracks)} Atmos/high-bitrate audio track(s) from DV manifest (best: {_best_kbps} kb/s)")
+                        self.log.info(f" + Added {len(_atmos_tracks)} Atmos/high-bitrate audio track(s) from DV manifest (Best: {_best_kbps} kb/s)")
                     else:
-                        self.log.info(" + DV audio manifest fetched (no Atmos found for this title)")
+                        self.log.info(" + DV audio manifest fetched (No Atmos found for this title)")
                 except Exception as e:
                     self.log.warning(f" - Failed to parse DV audio manifest: {e}")
             else:
-                self.log.warning(" - DV/UHD audio manifest unavailable for this title/region")
+                self.log.warning(" - DV/UHD audio manifest unavailable for this title")
 
         self._post_process_audio(tracks.audio)
 
@@ -1067,7 +1098,7 @@ class AMZN(Service):
             if bits:
                 self.log.info(f" + Amazon advertises: {', '.join(bits)} for this title")
         except Exception as e:
-            self.log.debug(f"Entitlement pre-check failed (non-fatal): {e}")
+            self.log.debug(f"Entitlement pre-check failed: {e}")
 
     def _bearer(self) -> Optional[str]:
         if self.living_room and self.actor_token:
@@ -1277,7 +1308,15 @@ class AMZN(Service):
             self.log.debug(f"Playback envelope refresh failed (non-fatal): {e}")
             return playbackInfo
 
-    def _build_manifest_payload(self, title, video_codec, bitrate_mode, quality, hdr, protocol, use_playlisted):
+    def _technologies(self, protocol: str) -> list:
+        if protocol == "SmoothStreaming":
+            return ["SmoothStreaming"]
+        if self.manifest_type_source == ParameterSource.COMMANDLINE and self.manifest_type == "DASH":
+            return ["DASH"]
+        return ["DASH", "SmoothStreaming"]
+
+    def _build_manifest_payload(self, title, video_codec, bitrate_mode, quality, hdr, protocol,
+                                use_playlisted):
         bitrate_adaptations = ["CVBR", "CBR"] if bitrate_mode in ("CVBR+CBR", "CVBR,CBR") else [bitrate_mode]
         range_fmt = self.VIDEO_RANGE_MAP.get(hdr, "None")
         drm_type = "PlayReady" if self.playready else "Widevine"
@@ -1303,12 +1342,8 @@ class AMZN(Service):
                     "manifestThinningToSupportedResolution": "Forbidden",
                 }
 
-            if protocol == "SmoothStreaming":
-                techs = {"SmoothStreaming": build_tech()}
-                supported_techs = ["SmoothStreaming"]
-            else:
-                techs = {"DASH": build_tech(), "SmoothStreaming": build_tech()}
-                supported_techs = ["DASH", "SmoothStreaming"]
+            supported_techs = self._technologies(protocol)
+            techs = {t: build_tech() for t in supported_techs}
 
             return {
                 "globalParameters": {
@@ -1400,9 +1435,8 @@ class AMZN(Service):
             }
             audit_request = {"device": {"category": "Tv", "platform": "Android"}}
 
-            technology = "SmoothStreaming" if protocol == "SmoothStreaming" else "DASH"
-            tech_block = {
-                technology: {
+            def _android_tech():
+                return {
                     "bitrateAdaptations": bitrate_adaptations,
                     "codecs": [video_codec],
                     "drmType": drm_type,
@@ -1420,7 +1454,9 @@ class AMZN(Service):
                     "vastTimelineType": "Absolute",
                     "manifestThinningToSupportedResolution": "Forbidden"
                 }
-            }
+
+            technologies = self._technologies(protocol)
+            tech_block = {t: _android_tech() for t in technologies}
             vod_request = {
                 "ads": {},
                 "device": {
@@ -1433,7 +1469,7 @@ class AMZN(Service):
                     "hdcpLevel": "2.2",
                     "maxVideoResolution": "2160p",
                     "platform": "Android",
-                    "supportedStreamingTechnologies": [technology]
+                    "supportedStreamingTechnologies": technologies
                 },
                 "playbackCustomizations": {},
                 "playbackSettingsRequest": {
@@ -1518,7 +1554,7 @@ class AMZN(Service):
                 )
 
             data_dict = self._build_manifest_payload(
-                title, video_codec, bitrate_mode, quality, hdr, protocol, use_playlisted
+                title, video_codec, bitrate_mode, quality, hdr, protocol, use_playlisted,
             )
 
             res = self.session.post(
@@ -1548,28 +1584,25 @@ class AMZN(Service):
                 if ignore_errors:
                     return {}
                 self.log.error(f" - Amazon reported an error when obtaining the Playback Manifest\n{res.text}"); raise SystemExit(1)
-            if "vodPlaylistedPlaybackUrls" in manifest and "vodPlaybackUrls" not in manifest:
+            if "vodPlaylistedPlaybackUrls" in manifest:
                 manifest = self._normalize_playlisted_manifest(manifest)
 
             vod = manifest.get("vodPlaybackUrls", {})
 
-            if video_codec == "AV1" and "error" in vod:
-                self.log.warning(f" - AV1 manifest not available: {vod['error'].get('message', 'unknown error')}")
-                return {}
-
             if "error" in vod:
+                message = vod["error"].get("message", "unknown error")
                 if ignore_errors:
+                    self.log.warning(f" - {video_codec} manifest error: {message}")
                     return {}
-                message = vod["error"]["message"]
                 self.log.error(f" - Amazon reported an error when obtaining the Playback Manifest: {message}"); raise SystemExit(1)
             for resource in ("PlaybackUrls", "AudioVideoUrls"):
                 err = manifest.get("errorsByResource", {}).get(resource)
                 if err and err.get("errorCode") not in (None, "PRS.NoRights.NotOwned"):
+                    detail = f"{err.get('message')} [{err.get('errorCode')}]"
                     if ignore_errors:
+                        self.log.warning(f" - {video_codec} {resource} error: {detail}")
                         return {}
-                    self.log.error(
-                        f" - Amazon had an error with the {resource}: {err.get('message')} [{err.get('errorCode')}]"
-                    ); raise SystemExit(1)
+                    self.log.error(f" - Amazon had an error with the {resource}: {detail}"); raise SystemExit(1)
 
             return manifest
 
@@ -1725,7 +1758,7 @@ class AMZN(Service):
             want.append(self.range)
         want_bit = f" (you requested {'/'.join(want)})" if want else ""
         return (
-            f"License denied/failed — this is typically a CDM robustness limit{want_bit}.{cdm_bit} "
+            f"License failed. CDM robustness limit. {want_bit}.{cdm_bit} "
             "UHD/HDR/DV needs Widevine L1 or PlayReady SL3000. Re-run at a lower quality "
             "(e.g. -q 1080) or SDR to get a licensable stream."
         )

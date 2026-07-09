@@ -18,7 +18,7 @@ class XUMO(Service):
     """
     Service code for XUMO Play (https://play.xumo.com)
 
-    Author: n0stal6ic
+    www.nostalgic.cc
     Authorization: None
     Geofence: US
     """

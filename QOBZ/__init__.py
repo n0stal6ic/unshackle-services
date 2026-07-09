@@ -20,7 +20,7 @@ class QOBZ(Service):
     """
     Service code for Qobuz (https://qobuz.com)
 
-    Author: n0stal6ic
+    www.nostalgic.cc
     Authorization: Credentials, Tokens.
     Security: None
     """

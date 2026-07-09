@@ -19,7 +19,7 @@ class HULU(Service):
     """
     Service code for Hulu (https://hulu.com)
 
-    Author: n0stal6ic
+    www.nostalgic.cc
     Authorization: Cookies
     Geofence: US
     """

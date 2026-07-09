@@ -21,7 +21,7 @@ class KNPY(Service):
     """
     Service code for Kanopy (https://kanopy.com).
     
-    Author: FairTrade, n0stal6ic
+    www.nostalgic.cc
     Authorization: Cookies, Credentials
     Security: FHD@L3
     Geofence: US, CA, UK, AU, NZ

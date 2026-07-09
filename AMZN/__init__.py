@@ -23,7 +23,7 @@ from unshackle.core.credential import Credential
 from unshackle.core.manifests import DASH, ISM
 from unshackle.core.service import Service
 from unshackle.core.titles import Episode, Movie, Movies, Series, Title_T, Titles_T
-from unshackle.core.tracks import Attachment, Chapter, Chapters, Subtitle, Tracks
+from unshackle.core.tracks import Attachment, Chapter, Chapters, Subtitle, Tracks, Video
 from unshackle.core.utils.collections import as_list
 
 
@@ -90,8 +90,8 @@ class AMZN(Service):
     """
     Service code for Amazon VOD (https://amazon.com) & Amazon Prime Video (https://primevideo.com).
 
-    Author: n0stal6ic
-    Authorization: Cookies
+    www.nostalgic.cc
+    Authorization: Credentials, Cookies
     Security: UHD@L1 FHD@Chrome SD@L3
     """
 
@@ -176,6 +176,7 @@ class AMZN(Service):
         self.playlisted = playlisted
 
         assert ctx.parent is not None
+        self.ctx = ctx
 
         self.chapters_only = ctx.parent.params.get("chapters_only")
         self.quality = ctx.parent.params.get("quality") or 1080
@@ -184,12 +185,15 @@ class AMZN(Service):
         range_ = ctx.parent.params.get("range_")
 
         self.range = range_[0].name if range_ else "SDR"
-        if vcodec and "AV1" in str(vcodec).upper():
+        vstr = str(vcodec).upper() if vcodec else ""
+        if "AV1" in vstr:
             self.vcodec = "AV1"
-        elif vcodec and "HEVC" in str(vcodec).upper():
+        elif "HEVC" in vstr:
             self.vcodec = "H265"
-        else:
+        elif "AVC" in vstr:
             self.vcodec = "H264"
+        else:
+            self.vcodec = "AV1"
 
         self.cdm = ctx.obj.cdm
         self.profile = ctx.obj.profile
@@ -202,12 +206,16 @@ class AMZN(Service):
         self.pv = False
         self.event = False
         self.device_token = None
+        self.device_refresh_token = None
         self.device_id = None
         self.customer_id = None
         self.client_id = "f22dbddb-ef2c-48c5-8876-bed0d47594fd"
         self.playbackEnvelope = None
         self.playbackInfo = None
         self.session_handoff_token = None
+        self.actor_token = None
+        self.profile_id = None
+        self.living_room = False
 
         if self.vquality_source != ParameterSource.COMMANDLINE:
             q_check = self.quality[0] if isinstance(self.quality, list) else self.quality
@@ -241,6 +249,7 @@ class AMZN(Service):
                 self.log.info(f" + Changed bitrate mode to CBR to be able to get highest quality UHD {self.range} video track")
 
         self.orig_bitrate = self.bitrate
+        self.requested_vcodec = self.vcodec
 
     def authenticate(self, cookies: Optional[CookieJar] = None, credential: Optional[Credential] = None) -> None:
         super().authenticate(cookies, credential)
@@ -290,7 +299,7 @@ class AMZN(Service):
 
         if self.manifest_type == "ISM" and not self.device:
             self.log.error(
-                " - ISM/SmoothStreaming requires a configured device in config.yaml. "
+                " - ISM/SmoothStreaming requires a configured device in config.yaml (device: profile). "
                 "Add one or use --manifest DASH."
             )
             raise SystemExit(1)
@@ -327,6 +336,15 @@ class AMZN(Service):
                 params={"deviceTypeID": self.device["device_type"], "deviceID": "Web"}
             )
             self._apply_verified_territory(res_cfg)
+        if self.playlisted and self.device_token:
+            if self._ensure_actor_token():
+                self.living_room = True
+                self.log.info(" + LivingRoomPlayer mode active (actor-token envelope + licensing)")
+            else:
+                self.log.warning(
+                    " - Could not acquire an actor token; --playlisted will use the classic "
+                    "envelope/licensing context"
+                )
 
     def _apply_verified_territory(self, res_cfg) -> None:
         if res_cfg.status_code != 200:
@@ -342,8 +360,8 @@ class AMZN(Service):
         if territory and account_region and territory.lower() != account_region.lower():
             self.log.warning(
                 f" - IP region '{territory}' does not match account region '{account_region}'. "
-                f"Amazon geo-locates by IP. Licensing and/or title lookup may be blocked. "
-                f"If the license step fails, use a {account_region} IP (e.g. --proxy {account_region} or a VPN)."
+                f"Amazon geo-locates by IP — licensing (and sometimes title lookup) may be blocked. "
+                f"If the license step fails, use a {account_region} IP (e.g. --proxy {account_region} or a matching VPN)."
             )
             return
         if territory:
@@ -352,6 +370,25 @@ class AMZN(Service):
             self.region["marketplace_id"] = marketplace
         elif marketplace and self.no_true_region:
             self.log.debug(" + --no-true-region set; keeping marketplace from config, ignoring IP-geo value")
+
+    @staticmethod
+    def _clean_show_name(*candidates: Optional[str]) -> str:
+        season_suffix = re.compile(
+            r"[\s:\-–—]+(?:Season|Series|Staffel|Saison|Temporada|Stagione|Seizoen)\s+\d+\s*$",
+            re.IGNORECASE,
+        )
+        cleaned_fallback = ""
+        for candidate in candidates:
+            if not candidate:
+                continue
+            cleaned = season_suffix.sub("", candidate).strip()
+            if cleaned and cleaned == candidate.strip():
+                return cleaned
+            if cleaned and not cleaned_fallback:
+                cleaned_fallback = cleaned
+        if cleaned_fallback:
+            return cleaned_fallback
+        return next((c.strip() for c in candidates if c), "")
 
     def get_titles(self) -> Titles_T:
         res = self.session.get(
@@ -413,12 +450,18 @@ class AMZN(Service):
                 continue
 
             product_details_season = res["productDetails"]["detail"]
+            show_name = self._clean_show_name(
+                product_details_season.get("parentTitle"),
+                product_details.get("parentTitle"),
+                product_details_season.get("title"),
+                product_details.get("title"),
+            )
 
             for episode in episode_data_list:
                 details = episode["detail"]
                 episodes_list.append(Episode(
                     id_=details["catalogId"],
-                    title=product_details["title"],
+                    title=show_name,
                     name=details["title"],
                     season=product_details_season["seasonNumber"],
                     number=episode["self"]["sequenceNumber"],
@@ -445,7 +488,7 @@ class AMZN(Service):
                     ep_num = int(item.get("self", {}).get("sequenceNumber", 0))
                     episodes_list.append(Episode(
                         id_=item["detail"]["catalogId"],
-                        title=product_details["title"],
+                        title=show_name,
                         name=item["detail"]["title"],
                         season=product_details_season["seasonNumber"],
                         number=ep_num,
@@ -508,52 +551,95 @@ class AMZN(Service):
             self.log.debug(f"SPA season discovery failed: {e}")
             return []
 
+    def _codec_fallback_chain(self, codec: str) -> list:
+        order = ["AV1", "H265", "H264"]
+        if codec not in order:
+            return [codec]
+        return order[order.index(codec):]
+
+    def _sync_vcodec_filter(self, codec: str) -> None:
+        enum_map = {"AV1": Video.Codec.AV1, "H265": Video.Codec.HEVC, "H264": Video.Codec.AVC}
+        target = enum_map.get(codec)
+        if not target:
+            return
+        params = getattr(getattr(self.ctx, "parent", None), "params", None)
+        if not isinstance(params, dict):
+            return
+        vlist = params.get("vcodec")
+        if isinstance(vlist, list) and vlist and target not in vlist:
+            vlist.append(target)
+
+    def _bitrate_for_codec(self, codec: str) -> str:
+        if self.bitrate_source == ParameterSource.COMMANDLINE:
+            return self.orig_bitrate
+        if self.manifest_type == "ISM":
+            return "CBR"
+        if self.vquality == "UHD" and self.range != "SDR":
+            return "CBR"
+        if codec == "AV1":
+            return "CVBR"
+        if codec == "H265" and self.range == "SDR":
+            return "CVBR+CBR"
+        return self.orig_bitrate
+
     def get_tracks(self, title: Title_T) -> Tracks:
         if self.chapters_only:
             return Tracks([])
+        self._check_entitlement(title)
+        self._warn_cdm_quality_mismatch()
 
         is_hybrid = self.range == "HYBRID"
-        effective_vcodec = self.vcodec
         effective_range = "DV" if is_hybrid else self.range
         video_protocol = "SmoothStreaming" if self.manifest_type == "ISM" else "DASH"
-        manifest = self.get_manifest(
-            title,
-            video_codec=effective_vcodec,
-            bitrate_mode=self.bitrate,
-            quality=self.vquality,
-            hdr=effective_range,
-            ignore_errors=(self.range == "DV" or is_hybrid),
-            protocol=video_protocol,
-            use_playlisted=self.playlisted
-        )
-        if (self.range == "DV" or is_hybrid) and not manifest.get("vodPlaybackUrls"):
-            self.log.warning(" - Dolby Vision request rejected by server, retrying with HDR10...")
-            effective_range = "HDR10"
-            manifest = self.get_manifest(
-                title,
-                video_codec=effective_vcodec,
-                bitrate_mode=self.bitrate,
-                quality=self.vquality,
-                hdr=effective_range,
-                ignore_errors=False,
-                protocol=video_protocol,
-                use_playlisted=self.playlisted
+
+        def _fetch_for_codec(codec: str) -> dict:
+            bmode = self._bitrate_for_codec(codec)
+            m = self.get_manifest(
+                title, video_codec=codec, bitrate_mode=bmode, quality=self.vquality,
+                hdr=effective_range, ignore_errors=True, protocol=video_protocol,
+                use_playlisted=self.playlisted,
             )
-        if not self._usable_manifest(manifest) and self.device_token and not self.playlisted:
-            self.log.info(" + Classic manifest empty; trying newer playlisted (LivingRoomPlayer) path...")
-            fallback = self.get_manifest(
-                title,
-                video_codec=effective_vcodec,
-                bitrate_mode=self.bitrate,
-                quality=self.vquality,
-                hdr=effective_range,
-                ignore_errors=True,
-                protocol=video_protocol,
-                use_playlisted=True
+            if (self.range == "DV" or is_hybrid) and not m.get("vodPlaybackUrls"):
+                m = self.get_manifest(
+                    title, video_codec=codec, bitrate_mode=bmode, quality=self.vquality,
+                    hdr="HDR10", ignore_errors=True, protocol=video_protocol,
+                    use_playlisted=self.playlisted,
+                )
+            if not self._usable_manifest(m) and self.device_token and not self.playlisted:
+                fb = self.get_manifest(
+                    title, video_codec=codec, bitrate_mode=bmode, quality=self.vquality,
+                    hdr=effective_range, ignore_errors=True, protocol=video_protocol,
+                    use_playlisted=True,
+                )
+                if self._usable_manifest(fb):
+                    m = fb
+            return m
+        requested_codec = self.requested_vcodec
+        self.vcodec = requested_codec
+        self.bitrate = self._bitrate_for_codec(requested_codec)
+        codec_chain = self._codec_fallback_chain(requested_codec)
+        manifest = {}
+        effective_vcodec = requested_codec
+        for codec in codec_chain:
+            if len(codec_chain) > 1:
+                self.log.info(f" + Requesting {codec} video manifest...")
+            manifest = _fetch_for_codec(codec)
+            if self._usable_manifest(manifest):
+                if codec != requested_codec:
+                    self.log.warning(f" - {requested_codec} unavailable for this title; using {codec}.")
+                effective_vcodec = codec
+                self.vcodec = codec
+                self.bitrate = self._bitrate_for_codec(codec)
+                self._sync_vcodec_filter(codec)
+                break
+            if len(codec_chain) > 1:
+                self.log.warning(f" - {codec} not available for this title.")
+
+        if not self._usable_manifest(manifest):
+            self.log.error(
+                f" - No usable manifest for this title with any codec ({', '.join(codec_chain)})."
             )
-            if self._usable_manifest(fallback):
-                manifest = fallback
-                self.log.info(" + Using playlisted (LivingRoomPlayer) manifest")
+            raise SystemExit(1)
 
         if "rightsException" in manifest.get("returnedTitleRendition", {}).get("selectedEntitlement", {}):
             self.log.error(" - The profile used does not have the rights to this title.")
@@ -788,7 +874,7 @@ class AMZN(Service):
                 else:
                     self.log.warning(" - No HDR10 manifest CDN available for hybrid mode")
             else:
-                self.log.warning(" - HDR10 manifest unavailable for hybrid mode; DV-only tracks will be used")
+                self.log.warning(" - HDR10 manifest unavailable for hybrid and DV-only tracks will be used")
 
         for sub in manifest.get("timedTextUrls", {}).get("result", {}).get("subtitleUrls", []) + \
                 manifest.get("timedTextUrls", {}).get("result", {}).get("forcedNarrativeUrls", []):
@@ -927,6 +1013,163 @@ class AMZN(Service):
             timecode = scene["textMap"]["TERTIARY"].replace("Starts at ", "")
             chapters.append(Chapter(name=chapter_title, timestamp=timecode))
         return chapters
+
+    def _check_entitlement(self, title) -> None:
+        try:
+            base = self.region.get("base_manifest")
+            if not base:
+                return
+            params = {
+                "itemId": title.id,
+                "presentationScheme": "android-tv-react",
+                "deviceTypeID": self.device.get("device_type"),
+                "deviceID": self.device_id,
+            }
+            headers = {"Accept": "application/json"}
+            _bearer = self.actor_token or self.device_token
+            if _bearer:
+                params["roles"] = "playback-envelope-supported"
+                headers["Authorization"] = f"Bearer {_bearer}"
+            else:
+                params["firmware"] = ""
+                params["roles"] = "prime-offer-supported,svod-supported"
+                params["clientFeatures"] = "EnableBuyBoxV2"
+
+            res = self.session.get(
+                url=f"https://{base}/lrcedge/getDataByJavaTransform/v1/lr/detailsPage/detailsPageATF",
+                params=params,
+                headers=headers,
+                timeout=15,
+            )
+            if res.status_code != 200:
+                self.log.debug(f"Entitlement pre-check unavailable ({res.status_code})")
+                return
+
+            resource = (res.json() or {}).get("resource", {}) or {}
+            message = (
+                resource.get("entitlementMessaging", {})
+                .get("ENTITLEMENT_MESSAGE_SLOT_DETAIL", {})
+                .get("message")
+            )
+            if message:
+                if any(k in message.lower() for k in ("join", "trial", "subscribe", "rent", "buy", "add-on", "add on")):
+                    self.log.warning(f" - Entitlement: {message} (this title may need a purchase/add-on)")
+                else:
+                    self.log.info(f" + Entitlement: {message}")
+
+            apply_hdr = resource.get("applyHdr")
+            apply_uhd = resource.get("applyUhd")
+            bits = []
+            if apply_uhd is not None:
+                bits.append(f"UHD {'available' if apply_uhd else 'not available'}")
+            if apply_hdr is not None:
+                bits.append(f"HDR {'available' if apply_hdr else 'not available'}")
+            if bits:
+                self.log.info(f" + Amazon advertises: {', '.join(bits)} for this title")
+        except Exception as e:
+            self.log.debug(f"Entitlement pre-check failed (non-fatal): {e}")
+
+    def _bearer(self) -> Optional[str]:
+        if self.living_room and self.actor_token:
+            return self.actor_token
+        return self.device_token
+
+    def _get_primary_profile(self) -> Optional[str]:
+        try:
+            base = self.region.get("base_manifest")
+            if not base or not self.device_token:
+                return None
+            res = self.session.get(
+                url=f"https://{base}/lrcedge/getDataByJavaTransform/v1/lr/profiles/profileSelection",
+                params={"deviceTypeID": self.device.get("device_type"), "deviceID": self.device_id},
+                headers={"Authorization": f"Bearer {self.device_token}", "Accept": "application/json"},
+                timeout=15,
+            ).json()
+            profiles = (res.get("resource") or {}).get("profiles") or []
+            default = next((p for p in profiles if p.get("isDefaultProfile")), None) or (profiles[0] if profiles else None)
+            return default.get("profileId") if default else None
+        except Exception as e:
+            self.log.debug(f"Profile lookup failed: {e}")
+            return None
+
+    def _ensure_actor_token(self) -> Optional[str]:
+        if self.actor_token:
+            return self.actor_token
+        if not self.device_token or not self.device_refresh_token:
+            return None
+
+        _profile = self.profile or "default"
+        cache = Cacher("AMZN").get(f"actor_token_{_profile}")
+        if cache and cache.data and cache.data.get("token") and cache.data.get("expires_in", 0) > int(time.time()):
+            self.actor_token = cache.data["token"]
+            self.profile_id = cache.data.get("profile_id")
+            self.log.debug(" + Using cached actor token")
+            return self.actor_token
+
+        try:
+            profile_id = self._get_primary_profile()
+            if not profile_id:
+                self.log.debug(" - No primary profile found for actor token")
+                return None
+            res = self.session.post(
+                url=self.endpoints["token"],
+                headers={"Content-Type": "application/json"},
+                json={
+                    "actor_id": profile_id,
+                    "app_name": "AIV",
+                    "requested_token_type": "actor_access_token",
+                    "source_token_type": "refresh_token",
+                    "source_device_tokens": [{
+                        "device_type": self.device.get("device_type"),
+                        "account_refresh_token": {"token": self.device_refresh_token},
+                    }],
+                },
+            ).json()
+            device_tokens = res.get("device_tokens") or []
+            token = (device_tokens[0].get("actor_access_token") or {}).get("token") if device_tokens else None
+            if not token:
+                self.log.debug(f" - Actor token exchange returned no token (Keys: {list(res.keys())})")
+                return None
+            self.actor_token = token
+            self.profile_id = profile_id
+            cache.set(
+                {"token": token, "profile_id": profile_id, "expires_in": int(time.time()) + 3000},
+                int(time.time()) + 3000,
+            )
+            self.log.info(" + Acquired LivingRoomPlayer actor token")
+            return token
+        except Exception as e:
+            self.log.debug(f"Actor token acquisition failed: {e}")
+            return None
+
+    def _livingroom_envelope(self, title) -> Optional[str]:
+        token = self._ensure_actor_token()
+        if not token:
+            return None
+        try:
+            base = self.region.get("base_manifest")
+            res = self.session.get(
+                url=f"https://{base}/lrcedge/getDataByJavaTransform/v1/lr/detailsPage/detailsPageATF",
+                params={
+                    "itemId": title.id,
+                    "presentationScheme": "android-tv-react",
+                    "deviceTypeID": self.device.get("device_type"),
+                    "deviceID": self.device_id,
+                    "roles": "playback-envelope-supported",
+                },
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                timeout=20,
+            ).json()
+            resource = (res or {}).get("resource") or {}
+            for action in resource.get("actions", []) or []:
+                pem = (action.get("metadata") or {}).get("playbackExperienceMetadata") or {}
+                if pem.get("playbackEnvelope"):
+                    self.playbackInfo = {"titleID": title.id, "playbackExperienceMetadata": pem}
+                    return pem["playbackEnvelope"]
+            self.log.debug(" - LivingRoom detailsPage returned no playback envelope")
+        except Exception as e:
+            self.log.debug(f"LivingRoom envelope fetch failed: {e}")
+        return None
 
     def playbackEnvelope_data(self, title):
         try:
@@ -1249,13 +1492,19 @@ class AMZN(Service):
 
     def get_manifest(self, title, video_codec, bitrate_mode, quality, hdr, ignore_errors=False,
                      protocol="DASH", use_playlisted=False, retries=3):
+        use_playlisted = use_playlisted or self.living_room
         if use_playlisted and not self.device_token:
-            self.log.warning(" - Playlisted (LivingRoomPlayer) path needs a registered device; using classic path")
+            self.log.warning(" - Playlisted (LivingRoomPlayer) path needs a registered device. Trying classic run.")
             use_playlisted = False
 
         for attempt in range(retries):
             if attempt == 0 or not self.playbackInfo:
-                self.playbackEnvelope = self.playbackEnvelope_data(title)
+                lr_env = self._livingroom_envelope(title) if self.living_room else None
+                if self.living_room and not lr_env:
+                    self.log.warning(" - LivingRoom envelope unavailable. Trying classic run.")
+                    self.living_room = False
+                    use_playlisted = self.playlisted
+                self.playbackEnvelope = lr_env or self.playbackEnvelope_data(title)
             else:
                 self.log.debug(f" + Manifest retry {attempt + 1}/{retries}; refreshing playback envelope")
                 try:
@@ -1286,7 +1535,7 @@ class AMZN(Service):
                 },
                 data=json.dumps(data_dict),
                 headers={
-                    "Authorization": f"Bearer {self.device_token}" if self.device_token else None,
+                    "Authorization": f"Bearer {self._bearer()}" if self._bearer() else None,
                 },
             )
 
@@ -1336,64 +1585,56 @@ class AMZN(Service):
         return self._get_license(challenge, title, track, widevine=False)
 
     def _get_license(self, challenge: bytes, title: Title_T, track, widevine: bool):
+        if not self.device_token:
+            try:
+                self.register_device()
+            except Exception:
+                pass
+
         challenge_bytes = challenge if isinstance(challenge, bytes) else challenge.encode("utf-8")
         encoded_challenge = base64.b64encode(challenge_bytes).decode("utf-8")
 
         amzn = track.data.get("amzn", {}) if isinstance(getattr(track, "data", None), dict) else {}
         envelope = amzn.get("envelope") or self.playbackEnvelope
         handoff = amzn.get("handoff") or self.session_handoff_token
+        is_ism = isinstance(getattr(track, "data", None), dict) and "ism" in track.data
 
-        data_lic = {
-            "licenseChallenge": encoded_challenge,
-            "playbackEnvelope": envelope,
-        }
-        if widevine:
-            data_lic["includeHdcpTestKey"] = True
+        endpoint = self.endpoints["license_wv"] if widevine else self.endpoints["license_pr"]
 
         if self.device_token:
-            d = self.device
-            software = {
-                "application": {"name": d.get("app_name", "AIV"), "version": d.get("firmware") or d.get("app_version", "1.0")},
-                "client": {"id": None},
-                "operatingSystem": {"name": d.get("os_name", "Android"), "version": str(d.get("os_version", "28"))},
-                "player": {"name": "Android UIPlayer SDK", "version": "4.1.18"},
-                "renderer": {"drmScheme": "WIDEVINE" if widevine else "PLAYREADY", "name": "MCMD"},
+            data_lic = {
+                "playbackEnvelope": envelope,
+                "licenseChallenge": encoded_challenge,
+                "deviceCapabilityFamily": "LivingRoomPlayer",
+                "packagingFormat": "SMOOTH_STREAMING" if is_ism else "MPEG_DASH",
             }
-            if d.get("firmware_version"):
-                software["firmware"] = {"version": str(d["firmware_version"])}
-            data_lic.update({
-                "capabilityDiscriminators": {
-                    "discriminators": {
-                        "hardware": {
-                            "chipset": d.get("device_chipset", ""),
-                            "manufacturer": d.get("manufacturer", ""),
-                            "modelName": d.get("device_model", ""),
-                        },
-                        "software": software,
-                    },
-                    "version": 1,
-                },
-                "deviceCapabilityFamily": "AndroidPlayer",
-                "packagingFormat": "SMOOTH_STREAMING" if (isinstance(getattr(track, "data", None), dict) and "ism" in track.data) else "MPEG_DASH",
-            })
+            if widevine:
+                data_lic["includeHdcpTestKey"] = True
             if getattr(track, "kid", None):
                 try:
                     data_lic["keyId"] = str(uuid.UUID(str(track.kid))).upper()
                 except (ValueError, AttributeError):
                     pass
+            params = {
+                "deviceID": self.device_id,
+                "deviceTypeID": self.device.get("device_type", self.config["device_types"]["browser"]),
+                "firmware": "1",
+                "marketplaceID": self.region["marketplace_id"],
+                "titleId": title.id,
+                "uxLocale": "en_US",
+            }
         else:
             if not handoff:
-                self.log.error(" - No sessionHandoffToken available."); raise SystemExit(1)
-            data_lic.update({
+                self.log.error(" - No device token and no sessionHandoffToken; cannot license."); raise SystemExit(1)
+            data_lic = {
+                "playbackEnvelope": envelope,
+                "licenseChallenge": encoded_challenge,
                 "deviceCapabilityFamily": "WebPlayer",
                 "sessionHandoffToken": handoff,
-            })
-
-        endpoint = self.endpoints["license_wv"] if widevine else self.endpoints["license_pr"]
-
-        res = self.session.post(
-            url=endpoint,
-            params={
+            }
+            if widevine:
+                data_lic["includeHdcpTestKey"] = True
+            params = {
                 "deviceID": self.device_id,
                 "deviceTypeID": self.device["device_type"],
                 "gascEnabled": str(self.pv).lower(),
@@ -1402,40 +1643,103 @@ class AMZN(Service):
                 "firmware": 1,
                 "titleId": title.id,
                 "nerid": self.generate_nerid(),
-            },
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.device_token}" if self.device_token else None,
-            },
-            json=data_lic
-        ).json()
+            }
+
+        try:
+            resp = self.session.post(
+                url=endpoint,
+                params=params,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self._bearer()}" if self._bearer() else None,
+                },
+                json=data_lic,
+            )
+            resp.raise_for_status()
+            res = resp.json()
+        except requests.exceptions.HTTPError as e:
+            msg = "Failed to license"
+            status = e.response.status_code if e.response is not None else None
+            if e.response is not None:
+                try:
+                    msg += f": {e.response.json()}"
+                except Exception:
+                    msg += f": {e.response.text[:200]}"
+            self.log.error(f" - {msg}")
+            if status in (403, 500):
+                self.log.error(f" - {self._license_denial_hint(track)}")
+            raise SystemExit(1)
+        except Exception as e:
+            self.log.error(f" - Failed to license: {e}"); raise SystemExit(1)
 
         if "errorsByResource" in res:
             error = res["errorsByResource"]
             code = error.get("errorCode") or error.get("type") or "Unknown"
             if code == "PRS.NoRights.AnonymizerIP":
                 self.log.error(" - Amazon detected a Proxy/VPN and refused to return a license."); raise SystemExit(1)
-            self.log.error(f" - Amazon reported an error during the License request: [{code}]"); raise SystemExit(1)
-
+            self.log.error(f" - Amazon reported an error during the License request: [{code}]")
+            self.log.error(f" - {self._license_denial_hint(track)}")
+            raise SystemExit(1)
         if "error" in res:
-            self.log.error(f" - License Error: {res['error']['message']}"); raise SystemExit(1)
+            self.log.error(f" - License Error: {res['error'].get('message', 'Unknown')}"); raise SystemExit(1)
+
         primary_key = "widevineLicense" if widevine else "playReadyLicense"
-        lic = res.get(primary_key)
-        if isinstance(lic, dict) and lic.get("license"):
-            return lic["license"]
+        lic = None
+        if isinstance(res.get(primary_key), dict):
+            lic = res[primary_key].get("license")
+        if not lic:
+            for key, val in res.items():
+                if "license" in key.lower() and isinstance(val, dict) and val.get("license"):
+                    lic = val["license"]; break
+                if "license" in key.lower() and isinstance(val, str) and val:
+                    lic = val; break
+        if not lic:
+            self.log.error(
+                f" - License response did not contain a '{primary_key}'. "
+                f"Response keys: {list(res.keys())}. Raw (truncated): {json.dumps(res)[:600]}"
+            )
+            self.log.error(f" - {self._license_denial_hint(track)}")
+            raise SystemExit(1)
+        return base64.b64decode(lic) if isinstance(lic, str) else lic
 
-        for key, val in res.items():
-            if "license" in key.lower() and isinstance(val, dict) and val.get("license"):
-                return val["license"]
-            if "license" in key.lower() and isinstance(val, str) and val:
-                return val
+    def _requested_uhd(self) -> bool:
+        q = self.quality[0] if isinstance(self.quality, list) and self.quality else self.quality
+        return self.vquality == "UHD" or (isinstance(q, int) and q > 1080)
 
-        self.log.error(
-            f" - License response did not contain a '{primary_key}'. "
-            f"Response keys: {list(res.keys())}. Raw (truncated): {json.dumps(res)[:600]}"
+    def _license_denial_hint(self, track=None) -> str:
+        level = None
+        try:
+            level = getattr(self.cdm, "security_level", None)
+        except Exception:
+            pass
+        cdm_bit = ""
+        if level == 3:
+            cdm_bit = " Your CDM is Widevine L3 (Amazon licenses only SD to L3)."
+        elif level in (2000, 3000):
+            cdm_bit = f" Your CDM is PlayReady SL{level}."
+        want = []
+        if self._requested_uhd() or (isinstance(getattr(track, 'height', None), int) and track.height > 1080):
+            want.append("UHD")
+        if self.range and self.range != "SDR":
+            want.append(self.range)
+        want_bit = f" (you requested {'/'.join(want)})" if want else ""
+        return (
+            f"License denied/failed — this is typically a CDM robustness limit{want_bit}.{cdm_bit} "
+            "UHD/HDR/DV needs Widevine L1 or PlayReady SL3000. Re-run at a lower quality "
+            "(e.g. -q 1080) or SDR to get a licensable stream."
         )
-        raise SystemExit(1)
+
+    def _warn_cdm_quality_mismatch(self) -> None:
+        try:
+            level = getattr(self.cdm, "security_level", None)
+            if level == 3 and (self._requested_uhd() or (self.range and self.range != "SDR")):
+                self.log.warning(
+                    " - Widevine L3 CDM with a UHD/HDR request. Amazon only licenses SD to L3, so the "
+                    "license will most likely be denied. For UHD/HDR use Widevine L1 / PlayReady SL3000, or -q 1080 / SDR."
+                )
+        except Exception:
+            pass
 
     def _tag_amzn_tracks(self, track_iterable, manifest: dict) -> None:
         token = (manifest.get("sessionization") or {}).get("sessionHandoffToken")
@@ -1620,7 +1924,9 @@ class AMZN(Service):
         if cdn:
             cdn = cdn.lower()
             return next((x for x in url_sets if (x.get("cdn") or "").lower() == cdn), {})
-
+        akamai = [x for x in url_sets if "akamai" in (x.get("cdn") or "").lower()]
+        if akamai:
+            return secrets.choice(akamai)
         return secrets.choice(url_sets)
 
     @staticmethod
@@ -1738,13 +2044,15 @@ class AMZN(Service):
         device_hash = hashlib.md5(json.dumps(self.device, sort_keys=True).encode()).hexdigest()[0:6]
         device_cache_path = f"device_tokens_{_profile}_{device_hash}"
 
-        self.device_token = self.DeviceRegistration(
+        _reg = self.DeviceRegistration(
             device=self.device,
             endpoints=self.endpoints,
             log=self.log,
             cache_path=device_cache_path,
             session=self.session
-        ).bearer
+        )
+        self.device_token = _reg.bearer
+        self.device_refresh_token = _reg.refresh_token
 
         self.device_id = self.device.get("device_serial")
         if not self.device_id:
@@ -1761,6 +2069,7 @@ class AMZN(Service):
 
             self.device = {k: str(v) if not isinstance(v, str) else v for k, v in self.device.items()}
             self.bearer = None
+            self.refresh_token = None
 
             cached_data = self.cache.get(self.cache_path)
 
@@ -1768,6 +2077,7 @@ class AMZN(Service):
                 if cached_data.data.get("expires_in", 0) > int(time.time()):
                     self.log.info(" + Using cached device bearer")
                     self.bearer = cached_data.data["access_token"]
+                    self.refresh_token = cached_data.data.get("refresh_token")
                 else:
                     self.log.info("Cached device bearer expired, refreshing...")
                     refresh_token = cached_data.data.get("refresh_token")
@@ -1778,6 +2088,7 @@ class AMZN(Service):
                         refreshed_tokens["expires_in"] = int(time.time()) + expires_seconds
                         cached_data.set(refreshed_tokens, refreshed_tokens["expires_in"])
                         self.bearer = refreshed_tokens["access_token"]
+                        self.refresh_token = refreshed_tokens.get("refresh_token")
                     else:
                         self.log.info(" + Re-registering device bearer")
                         self.bearer = self.register(self.device)
@@ -1789,8 +2100,8 @@ class AMZN(Service):
             code_pair = self.get_code_pair(device)
             public_code = code_pair["public_code"]
 
-            self.log.info(f" + Visit https://www.primevideo.com/mytv and enter the code: {public_code}")
-            self.log.info("   Waiting for authorisation (up to 5 minutes)")
+            self.log.info(f" + Visit https://www.primevideo.com/mytv and enter code: {public_code}")
+            self.log.info("    Waiting for authorisation (May take up to 5 minutes)")
 
             interval = 10
             deadline = int(time.time()) + 300
@@ -1833,6 +2144,7 @@ class AMZN(Service):
             keyed_cache = self.cache.get(self.cache_path)
             keyed_cache.set(bearer_data, int(time.time()) + int(expires_val))
 
+            self.refresh_token = bearer_data["refresh_token"]
             self.log.info(" + Device registered and token cached successfully")
             return bearer_data["access_token"]
 

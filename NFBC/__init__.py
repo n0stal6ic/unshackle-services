@@ -17,7 +17,7 @@ class NFBC(Service):
     """
     Service code for National Film Board of Canada (https://www.nfb.ca)
 
-    Author: n0stal6ic
+    www.nostalgic.cc
     Authorization: None
     Geofence: CA, US
     """

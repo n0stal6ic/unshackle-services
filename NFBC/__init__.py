@@ -16,7 +16,7 @@ from unshackle.core.tracks import Chapters, Tracks
 class NFBC(Service):
     """
     Service code for National Film Board of Canada (https://www.nfb.ca)
-
+    
     www.nostalgic.cc
     Authorization: None
     Geofence: CA, US

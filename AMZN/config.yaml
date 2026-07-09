@@ -37,21 +37,21 @@ dtid_dict: [
 
 device:
   default:
-    manufacturer: LG ELECTRONICS INC.
-    device_chipset: Mediatek
+    manufacturer: WV
+    device_chipset: MediaTek
     domain: Device
     app_name: AIV
     os_name: Android
     app_version: '3.19.5'
-    device_model: OLED55C3PUA
-    os_version: '23'
+    device_model: WV_ELPTK514KT22_541264
+    os_version: '9'
     device_serial: '95047855cf573479341d134104cfa312'
-    device_type: A71I8788P1ZV8
-    device_name: "%FIRST_NAME%'s%DUPE_STRATEGY_1ST% LG-webOS-TV"
-    software_version: '23.20.61'
-    firmware: 'webOS 8.0.0/2304'
-    firmware_version: 'LG Browser/8.00.00 (webOS.TV-2023), _TV_O18/23.20.61 (LG, OLED55C3PUA, wireless)'
-    user_agent: 'Dalvik/2.1.0 (Linux; U; Android 6.0.1; OLED55C3PUA Build/MMB29M)'
+    device_type: A2SNKIF736WF4T
+    device_name: "Zos Android TV"
+    software_version: '248'
+    firmware: 'Android 9'
+    firmware_version: '9.0 | Android | TV | armeabi-v7a | CE CDM 14.0.0'
+    user_agent: 'Dalvik/2.1.0 (Linux; U; Android 9; WV_ELPTK514KT22_541264 Build/PPR1.180610.011)'
 
 device_types:
   browser: 'AOAGZA014O5RE'

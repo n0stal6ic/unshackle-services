@@ -23,7 +23,7 @@ class PCOK(Service):
     """
     Service code for Peacock TV (https://peacocktv.com)
 
-    Author: n0stal6ic
+    www.nostalgic.cc
     Authorization: Cookies, Credentials
     Geofence: US
     """

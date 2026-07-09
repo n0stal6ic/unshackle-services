@@ -19,7 +19,7 @@ class PBS(Service):
     """
     Service code for PBS (https://www.pbs.org)
 
-    Author: n0stal6ic
+    www.nostalgic.cc
     Authorization: Cookies
     Geofence: US
     """

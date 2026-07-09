@@ -17,7 +17,7 @@ from unshackle.core.tracks import Chapters, Subtitle, Tracks
 class XUMO(Service):
     """
     Service code for XUMO Play (https://play.xumo.com)
-
+    
     www.nostalgic.cc
     Authorization: None
     Geofence: US

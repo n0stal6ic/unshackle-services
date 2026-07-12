@@ -13,4 +13,5 @@ Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle).
 | PBSK | [PBS Kids](https://pbskids.org/) | FHD@L3 | None |
 | PCOK | [Peacock](https://www.peacocktv.com/) | FHD@L3/SL150 <br> UHD@L1/SL3K | Cookies, Credentials |
 | QOBZ | [Qobuz](https://play.qobuz.com/) | None | Credentials, Tokens |
+| SNDC | [SoundCloud](https://soundcloud.com/) | Cookies, Credentials | None |
 | XUMO | [XUMO Play](https://play.xumo.com/) | None | None |

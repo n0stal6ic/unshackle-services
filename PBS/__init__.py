@@ -100,8 +100,53 @@ class PBS(Service):
 
         m3u8_url = self._resolve_encoding(encodings[0])
         self.log.debug(f"HLS master: {m3u8_url}")
+        tracks = HLS.from_url(url=m3u8_url, session=self.session).to_tracks(language=title.language)
+        kept_subs = []
+        for sub in tracks.subtitles:
+            if self._subtitle_has_cues(sub):
+                kept_subs.append(sub)
+            else:
+                self.log.warning(
+                    f" - Dropping empty subtitle track ({sub.language}{' SDH' if sub.sdh else ''})."
+                )
+        tracks.subtitles = kept_subs
 
-        return HLS.from_url(url=m3u8_url, session=self.session).to_tracks(language=title.language)
+        return tracks
+
+    def _subtitle_has_cues(self, sub: Any) -> bool:
+        from urllib.parse import urljoin
+
+        url = sub.url[0] if isinstance(sub.url, list) and sub.url else sub.url
+        if not isinstance(url, str):
+            return True
+        try:
+            resp = self.session.get(url, timeout=15)
+            if not resp.ok:
+                return True
+            text = resp.text
+        except Exception:
+            return True
+
+        if "-->" in text:
+            return True
+        if "#EXTM3U" not in text:
+            return False
+
+        checked = 0
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                seg = self.session.get(urljoin(url, line), timeout=15)
+            except Exception:
+                return True
+            if seg.ok and "-->" in seg.text:
+                return True
+            checked += 1
+            if checked >= 40:
+                break
+        return False
 
     def get_chapters(self, title: Title_T) -> Chapters:
         return Chapters()

@@ -5,6 +5,7 @@ import re
 from http.cookiejar import CookieJar
 from typing import Any, Optional
 import click
+from click.core import ParameterSource
 from langcodes import Language
 from lxml import etree
 from unshackle.core.constants import AnyTrack
@@ -30,9 +31,12 @@ class HULU(Service):
         r"^(?:https?://(?:www\.)?hulu\.com/(?P<type>movie|series)/)?"
         r"(?:[a-z0-9-]+-)?(?P<id>[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})"
     )
-    AUDIO_CODEC_MAP = {
-        "AAC": "mp4a",
-        "EC3": "ec-3",
+    HULU_RANGE_MAP = {
+        "SDR": "SDR",
+        "HLG": "DOLBY_VISION",
+        "HDR10": "DOLBY_VISION",
+        "HDR10P": "DOLBY_VISION",
+        "DV": "DOLBY_VISION",
     }
 
     @staticmethod
@@ -41,18 +45,27 @@ class HULU(Service):
     @click.option(
         "-mt", "--mpd-type",
         type=click.Choice(["new", "old"], case_sensitive=False),
-        default="new",
-        help="Which MPD device type to use.",
+        default="old",
+        help="Device profile to request (Old=166, New=210).",
     )
+    @click.option("-m", "--movie", is_flag=True, default=False,
+                  help="Force the title to be treated as a movie.")
+    @click.option("-sh", "--show", "force_series", is_flag=True, default=False,
+                  help="Force the title to be treated as a show.")
     @click.pass_context
     def cli(ctx, **kwargs):
         return HULU(ctx, **kwargs)
 
-    def __init__(self, ctx, title: str, mpd_type: str):
+    def __init__(self, ctx, title: str, mpd_type: str, movie: bool, force_series: bool):
         self.title = title
         self.mpd_type = mpd_type
-        self.vcodec = ctx.parent.params.get("vcodec")
-        self.acodec = ctx.parent.params.get("acodec")
+        self.movie = movie
+        self.force_series = force_series
+        self.vcodec = ctx.parent.params.get("vcodec") or []
+        self.acodec = ctx.parent.params.get("acodec") or []
+        range_ = ctx.parent.params.get("range_")
+        self.range = range_[0].name if range_ else "SDR"
+        self.range_source = ctx.get_parameter_source("range_")
         self.license_url_widevine: Optional[str] = None
         self.license_url_playready: Optional[str] = None
         self._playlist: Optional[dict] = None
@@ -72,11 +85,13 @@ class HULU(Service):
 
         title_id = m.group("id")
         detected_type = m.group("type")
-
+        if self.movie:
+            return self._get_movie(title_id)
+        if self.force_series:
+            return self._get_series(title_id, allow_movie_fallback=False)
         if detected_type == "movie":
             return self._get_movie(title_id)
-
-        return self._get_series(title_id)
+        return self._get_series(title_id, allow_movie_fallback=True)
 
     def _get_movie(self, title_id: str) -> Movies:
         resp = self.session.get(self.config["endpoints"]["movie"].format(id=title_id))
@@ -96,14 +111,14 @@ class HULU(Service):
             data=title_data,
         )])
 
-    def _get_series(self, title_id: str) -> Series:
+    def _get_series(self, title_id: str, allow_movie_fallback: bool = True) -> Series:
         resp = self.session.get(self.config["endpoints"]["series"].format(id=title_id))
         try:
             resp.raise_for_status()
         except Exception as e:
             info = self._safe_json(resp)
-            if resp.status_code == 400 and "entity type" in info.get("message", "").lower():
-                self.log.info("Detected movie UUID — retrying on movie endpoint.")
+            if allow_movie_fallback and resp.status_code == 400 and "entity type" in info.get("message", "").lower():
+                self.log.info("Detected movie UUID. Retrying movie endpoint.")
                 return self._get_movie(title_id)
             raise ValueError(
                 f"Failed to get series {title_id}: {info.get('message', e)} [{info.get('code')}]"
@@ -119,6 +134,12 @@ class HULU(Service):
 
         series = Series()
         for season in season_data.get("items", []):
+            embedded = season.get("items")
+            if embedded and any(ep.get("_type") == "episode" for ep in embedded):
+                for episode in embedded:
+                    self._add_episode(series, season, episode)
+                continue
+
             season_id_part = season.get("id", "").rsplit("::", 1)[-1]
             season_resp = self.session.get(
                 self.config["endpoints"]["season"].format(id=title_id, season=season_id_part)
@@ -130,41 +151,44 @@ class HULU(Service):
                 raise ValueError(f"Failed to get season {season_id_part}: {info.get('message', e)}")
 
             for episode in season_resp.json().get("items", []):
-                try:
-                    ep_season = int(episode["season"]) if episode.get("season") is not None else None
-                    ep_number = int(episode["number"]) if episode.get("number") is not None else None
-                except (ValueError, TypeError):
-                    ep_season = episode.get("season")
-                    ep_number = episode.get("number")
-
-                series.add(Episode(
-                    id_=f"{season.get('id')}::{episode.get('season')}::{episode.get('number')}",
-                    service=self.__class__,
-                    title=episode.get("series_name"),
-                    season=ep_season,
-                    number=ep_number,
-                    name=episode.get("name"),
-                    language="en",
-                    data=episode,
-                ))
+                self._add_episode(series, season, episode)
 
         return series
 
-    def get_tracks(self, title: Title_T) -> Tracks:
-        if self.vcodec == Video.Codec.HEVC:
-            codec = "H265"
-        elif self.vcodec == Video.Codec.AVC:
-            codec = "H264"
-        else:
-            codec = "H264"
+    def _add_episode(self, series: Series, season: dict, episode: dict) -> None:
+        try:
+            ep_season = int(episode["season"]) if episode.get("season") is not None else None
+            ep_number = int(episode["number"]) if episode.get("number") is not None else None
+        except (ValueError, TypeError):
+            ep_season = episode.get("season")
+            ep_number = episode.get("number")
 
-        eab_id = (title.data.get("bundle") or {}).get("eab_id")
-        if not eab_id:
-            raise ValueError(f"Could not find eab_id in title data for '{title}'.")
+        series.add(Episode(
+            id_=f"{season.get('id')}::{episode.get('season')}::{episode.get('number')}",
+            service=self.__class__,
+            title=episode.get("series_name"),
+            season=ep_season,
+            number=ep_number,
+            name=episode.get("name"),
+            language="en",
+            data=episode,
+        ))
 
+    def _dynamic_range(self) -> str:
+        if self.range_source != ParameterSource.COMMANDLINE:
+            return "DOLBY_VISION"
+        return self.HULU_RANGE_MAP.get(self.range, "SDR")
+
+    def _codec_preference(self) -> list:
+        if Video.Codec.HEVC in self.vcodec:
+            return ["H265"]
+        if Video.Codec.AVC in self.vcodec:
+            return ["H264"]
+        return ["H265", "H264"]
+
+    def _request_playlist(self, eab_id: str, codec: str, dynamic_range: str) -> dict:
         deejay_id = (
-            self.config["device_ids"]["new"]
-            if self.mpd_type == "new"
+            self.config["device_ids"]["new"] if self.mpd_type == "new"
             else self.config["device_ids"]["old"]
         )
         version = 1 if self.mpd_type == "new" else 9999999
@@ -186,12 +210,9 @@ class HULU(Service):
                     "playback": {
                         "version": 2,
                         "video": {
-                            "dynamic_range": "DOLBY_VISION",
+                            "dynamic_range": dynamic_range,
                             "codecs": {
-                                "values": [
-                                    x for x in self.config["codecs"]["video"]
-                                    if x["type"] == codec
-                                ],
+                                "values": [x for x in self.config["codecs"]["video"] if x["type"] == codec],
                                 "selection_mode": self.config["codecs"]["video_selection"],
                             },
                         },
@@ -238,42 +259,71 @@ class HULU(Service):
             playlist = resp.json()
         except Exception as e:
             info = self._safe_json(resp) if resp is not None else {}
-            raise ValueError(
-                f"Failed to fetch manifest: {info.get('message', e)} ({info.get('code', '')})"
-            )
+            raise ValueError(f"{info.get('message', e)} ({info.get('code', '')})")
 
         if "stream_url" not in playlist:
+            raise ValueError(f"Manifest response missing 'stream_url' (Keys: {list(playlist.keys())})")
+        return playlist
+
+    def get_tracks(self, title: Title_T) -> Tracks:
+        eab_id = (title.data.get("bundle") or {}).get("eab_id")
+        if not eab_id:
+            raise ValueError(f"Could not find eab_id in title data for '{title}'.")
+
+        codec_chain = self._codec_preference()
+        tracks: Optional[Tracks] = None
+        last_reason = ""
+
+        for codec in codec_chain:
+            dynamic_range = self._dynamic_range() if codec == "H265" else "SDR"
+            if len(codec_chain) > 1:
+                self.log.info(f"Requesting {codec} manifest ({dynamic_range})...")
+
+            try:
+                playlist = self._request_playlist(eab_id, codec, dynamic_range)
+            except ValueError as e:
+                last_reason = str(e)
+                self.log.warning(f" - {codec} manifest unavailable: {e}")
+                continue
+
+            self._playlist = playlist
+            self.license_url_widevine = playlist.get("wv_server")
+            self.license_url_playready = playlist.get("dash_pr_server")
+
+            lang = playlist.get("video_metadata", {}).get("language") or "en"
+            title.language = Language.get(lang)
+
+            manifest_url = playlist["stream_url"]
+            self.log.info(f"DASH: {manifest_url}")
+
+            mpd_resp = self.session.get(manifest_url)
+            mpd_resp.raise_for_status()
+            mpd_text = mpd_resp.text
+
+            if "disney" in manifest_url:
+                mpd_text = self._normalize_ad_markers(mpd_text)
+                mpd_text = self._strip_duplicate_representations(mpd_text)
+
+            parsed = self._parse_dash(mpd_text, manifest_url, title.language)
+            if parsed.videos:
+                if codec != codec_chain[0]:
+                    self.log.info(f"{codec_chain[0]} not available for this title. Using {codec}.")
+                tracks = parsed
+                break
+            last_reason = f"no {codec} video tracks in manifest"
+            self.log.warning(f" - {last_reason}; trying next codec.")
+
+        if tracks is None:
             raise ValueError(
-                f"Manifest response missing 'stream_url'. Keys: {list(playlist.keys())}"
+                f"Could not get a usable video manifest for '{title}' "
+                f"(tried {', '.join(codec_chain)}). {last_reason}"
             )
 
-        self._playlist = playlist
-        self.license_url_widevine = playlist.get("wv_server")
-        self.license_url_playready = playlist.get("dash_pr_server")
-
-        lang = playlist.get("video_metadata", {}).get("language") or "en"
-        title.language = Language.get(lang)
-
-        manifest_url = playlist["stream_url"]
-        self.log.info(f"DASH: {manifest_url}")
-
-        mpd_resp = self.session.get(manifest_url)
-        mpd_resp.raise_for_status()
-        mpd_text = mpd_resp.text
-
-        if "disney" in manifest_url:
-            mpd_text = self._normalize_ad_markers(mpd_text)
-            mpd_text = self._strip_duplicate_representations(mpd_text)
-
-        tracks = self._parse_dash(mpd_text, manifest_url, title.language)
-
         if self.acodec:
-            mapped = self.AUDIO_CODEC_MAP.get(self.acodec)
-            if mapped:
-                tracks.audio = [x for x in tracks.audio if (x.codec or "").startswith(mapped)]
+            tracks.audio = [x for x in tracks.audio if x.codec in self.acodec]
 
         for track in tracks.audio:
-            if track.bitrate > 768_000:
+            if track.bitrate and track.bitrate > 768_000:
                 track.bitrate = 768_000
             if track.channels == 6.0:
                 track.channels = 5.1
@@ -294,53 +344,55 @@ class HULU(Service):
         if not self._playlist:
             return []
 
-        meta = self._playlist.get("video_metadata", {})
-        segments_raw = meta.get("segments")
-        end_credits_raw = meta.get("end_credits_time")
-        frame_rate = int(meta.get("frame_rate") or 24) or 24
+        try:
+            meta = self._playlist.get("video_metadata", {})
+            segments_raw = meta.get("segments")
+            end_credits_raw = meta.get("end_credits_time")
+            frame_rate = int(meta.get("frame_rate") or 24) or 24
 
-        if not segments_raw and not end_credits_raw:
+            if not segments_raw and not end_credits_raw:
+                return []
+
+            def smpte_to_timestamp(tc: str) -> str:
+                tc = tc.strip()
+                if ";" in tc:
+                    time_part, frames = tc.rsplit(";", 1)
+                    ms = int(round(int(frames) * 1000 / frame_rate))
+                elif "." in tc:
+                    time_part, frac = tc.rsplit(".", 1)
+                    ms = int(frac[:3].ljust(3, "0"))
+                else:
+                    time_part = tc
+                    ms = 0
+
+                if ms >= 1000:
+                    h, m, s = (int(x) for x in time_part.split(":"))
+                    total_s = h * 3600 + m * 60 + s + ms // 1000
+                    ms = ms % 1000
+                    h, rem = divmod(total_s, 3600)
+                    m, s = divmod(rem, 60)
+                    time_part = f"{h:02d}:{m:02d}:{s:02d}"
+
+                return f"{time_part}.{ms:03d}"
+
+            timestamps = ["00:00:00.000"]
+
+            if segments_raw:
+                for seg in segments_raw.split(","):
+                    seg = seg.strip().lstrip("T:")
+                    if seg:
+                        timestamps.append(smpte_to_timestamp(seg))
+
+            if end_credits_raw:
+                ts = smpte_to_timestamp(end_credits_raw)
+                if ts != "00:00:00.000":
+                    timestamps.append(ts)
+
+            timestamps = sorted(set(timestamps))
+            return [Chapter(timestamp=ts) for ts in timestamps]
+        except Exception as e:
+            self.log.warning(f"Failed to parse chapters: {e}")
             return []
-
-        def smpte_to_timestamp(tc: str) -> str:
-            tc = tc.strip()
-            if ";" in tc:
-                time_part, frames = tc.rsplit(";", 1)
-                ms = int(round(int(frames) * 1000 / frame_rate))
-            elif "." in tc:
-                time_part, frac = tc.rsplit(".", 1)
-                ms = int(frac[:3].ljust(3, "0"))
-            else:
-                time_part = tc
-                ms = 0
-
-            if ms >= 1000:
-                h, m, s = (int(x) for x in time_part.split(":"))
-                total_s = h * 3600 + m * 60 + s + ms // 1000
-                ms = ms % 1000
-                h, rem = divmod(total_s, 3600)
-                m, s = divmod(rem, 60)
-                time_part = f"{h:02d}:{m:02d}:{s:02d}"
-
-            return f"{time_part}.{ms:03d}"
-
-        timestamps = ["00:00:00.000"]
-
-        if segments_raw:
-            for seg in segments_raw.split(","):
-                seg = seg.strip().lstrip("T:")
-                if seg:
-                    timestamps.append(smpte_to_timestamp(seg))
-
-        if end_credits_raw:
-            ts = smpte_to_timestamp(end_credits_raw)
-            if ts != "00:00:00.000":
-                timestamps.append(ts)
-
-        return [
-            Chapter(timestamp=ts, name=f"Chapter {i + 1:02d}")
-            for i, ts in enumerate(timestamps)
-        ]
 
     def get_widevine_service_certificate(self, **_: Any) -> None:
         return None
@@ -381,9 +433,13 @@ class HULU(Service):
 
     def authenticate(self, cookies: Optional[CookieJar] = None, credential: Optional[Credential] = None) -> None:
         if not cookies:
-            raise EnvironmentError("Hulu requires browser cookies for authentication.")
+            raise EnvironmentError("Hulu requires cookies for authentication.")
         self.session.cookies.update(cookies)
-        self.session.headers.update({"User-Agent": self.config["user_agent"]})
+        self.session.headers.update({
+            "User-Agent": self.config["user_agent"],
+            "Origin": "https://www.hulu.com",
+            "Referer": "https://www.hulu.com/",
+        })
 
     def _parse_dash(self, mpd_text: str, manifest_url: str, language) -> Tracks:
         try:
@@ -394,7 +450,7 @@ class HULU(Service):
 
         self.log.warning(
             "Duplicate track IDs detected in manifest "
-            "Retrying with graceful deduplication."
+            "Retrying with deduplication."
         )
 
         from unshackle.core.tracks import Tracks as _Tracks

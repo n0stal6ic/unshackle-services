@@ -41,8 +41,8 @@ class SNDC(Service):
                   type=click.Choice(["original", "aac", "opus", "mp3"], case_sensitive=False),
                   default=None,
                   help="original = Uploader's downloadable file (or best available); "
-                       "aac = Best AAC (256k on Go+); opus = Opus ~72k (the app's efficient "
-                       "stream); mp3 = 128k MP3. Default: original.")
+                       "aac = AAC-256k; opus = Opus-72k; "
+                       "mp3 = 128k-MP3. Default: original.")
     @click.pass_context
     def cli(ctx, **kwargs):
         return SNDC(ctx, **kwargs)

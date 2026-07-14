@@ -152,13 +152,17 @@ class AMZN(Service):
                   help="Use Amazon's newer LivingRoomPlayer 'vodPlaylistedPlaybackUrls' request path "
                        "(requires a registered device). Off by default; the classic path is used first and "
                        "this is also tried automatically as a fallback when a device is registered.")
+    @click.option("-nd", "--no-device", "no_device", is_flag=True, default=False,
+                  help="Skip the TV login device-code registration entirely and "
+                       "authenticate with cookies only, as an unregistered WebPlayer. Trade-off: "
+                       "No ISM/SmoothStreaming and UHD/HDR/DV are usually not licensed to a web player.")
     @click.pass_context
     def cli(ctx, **kwargs):
         return AMZN(ctx, **kwargs)
 
     def __init__(self, ctx, title, bitrate: str, player: str, cdn: str, vquality: str, single: bool,
                  amanifest: str, aquality: str, manifest_type: str, drm_system: str,
-                 no_true_region: bool, playlisted: bool):
+                 no_true_region: bool, playlisted: bool, no_device: bool):
         super().__init__(ctx)
         self.parse_title(ctx, title)
         self.bitrate = bitrate
@@ -175,6 +179,7 @@ class AMZN(Service):
         self.drm_system = drm_system
         self.no_true_region = no_true_region
         self.playlisted = playlisted
+        self.no_device = no_device
 
         assert ctx.parent is not None
         self.ctx = ctx
@@ -290,6 +295,19 @@ class AMZN(Service):
 
         _profile = self.profile or "default"
         self.device = (self.config.get("device") or {}).get(_profile, {})
+        if self.no_device:
+            if self.device:
+                self.log.info(" + No-Device setting active. Using cookies only.")
+            self.device = {}
+            if self.manifest_type == "ISM":
+                self.log.warning(
+                    " - ISM/SmoothStreaming needs a registered device."
+                )
+                self.manifest_type = "DASH"
+            if self.vquality == "UHD" or self.range != "SDR":
+                self.log.warning(
+                    " - UHD/HDR/DV are generally not licensed to an unregistered WebPlayer."
+                )
 
         dtid_dict = self.config.get("dtid_dict", [])
         if self.device and dtid_dict:
@@ -371,8 +389,8 @@ class AMZN(Service):
         if territory and account_region and territory.lower() != account_region.lower():
             self.log.warning(
                 f" - IP region '{territory}' does not match account region '{account_region}'. "
-                f"Amazon geo-locates by IP — licensing (and sometimes title lookup) may be blocked. "
-                f"If the license step fails, use a {account_region} IP (e.g. --proxy {account_region} or a matching VPN)."
+                f"Amazon geo-locates by IP. Licensing may be blocked. "
+                f"If the license step fails, use a {account_region} IP (e.g. --proxy {account_region} or a VPN)."
             )
             return
         if territory:
@@ -380,7 +398,7 @@ class AMZN(Service):
         if marketplace and not self.no_true_region:
             self.region["marketplace_id"] = marketplace
         elif marketplace and self.no_true_region:
-            self.log.debug(" + --no-true-region set; keeping marketplace from config, ignoring IP-geo value")
+            self.log.debug(" + --no-true-region is active. Keeping marketplace from config, ignoring IP-geo value.")
 
     @staticmethod
     def _clean_show_name(*candidates: Optional[str]) -> str:
@@ -781,7 +799,7 @@ class AMZN(Service):
                 except Exception as e:
                     self.log.warning(f" - Failed to parse audio manifest: {e}")
 
-        if (self.config.get("device") or {}).get(self.profile or "default", None):
+        if (self.config.get("device") or {}).get(self.profile or "default", None) and not self.no_device:
             self.log.info(" + Fetching DV/UHD manifest for Atmos audio (576kbps DD+)")
             temp_device = self.device
             temp_token = self.device_token
@@ -1618,7 +1636,7 @@ class AMZN(Service):
         return self._get_license(challenge, title, track, widevine=False)
 
     def _get_license(self, challenge: bytes, title: Title_T, track, widevine: bool):
-        if not self.device_token:
+        if not self.device_token and not self.no_device:
             try:
                 self.register_device()
             except Exception:
@@ -1831,14 +1849,14 @@ class AMZN(Service):
                 handoff = (track.data.get("amzn") or {}).get("handoff")
             handoff = handoff or self.session_handoff_token
             if not handoff or not isinstance(handoff, str):
-                self.log.debug("No session handoff token available; skipping keep-alive session")
+                self.log.debug("Skipping keep-alive session because no session handoff token is available.")
                 return
 
             refreshed = self.playbackEnvelope_update(self.playbackInfo) or self.playbackInfo or {}
             envelope = (refreshed.get("playbackExperienceMetadata", {}) or {}).get("playbackEnvelope") \
                 or self.playbackEnvelope
             if not envelope:
-                self.log.debug("No playback envelope for keep-alive session; skipping")
+                self.log.debug("Skipping. No playback envelope for keep-alive session.")
                 return
 
             def session_params():

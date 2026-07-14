@@ -2,9 +2,9 @@ user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML
 
 base_url: 'https://api-v2.soundcloud.com'
 web_url: 'https://soundcloud.com'
+drm_license_host: 'https://license.media-streaming.soundcloud.cloud'
 
 client_id: 'lmRjTI0FqeXygHMXc3hRzS7hth20PNk5'
-
 app_version: '1783608776'
-# original (best), aac (aac_256 Go+), mp3 (mp3_1_0 128kb/s)
+
 default_quality: 'original'

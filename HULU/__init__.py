@@ -301,8 +301,8 @@ class HULU(Service):
                 mpd_resp.raise_for_status()
                 mpd_text = mpd_resp.text
             except Exception as e:
-                last_reason = f"failed to fetch {codec} manifest: {e}"
-                self.log.warning(f" - {last_reason}; trying next codec.")
+                last_reason = f"- Failed to fetch {codec} Manifest: {e}"
+                self.log.warning(f" - {last_reason}; Trying next codec.")
                 continue
 
             if "disney" in manifest_url:

@@ -42,7 +42,7 @@ class SNDC(Service):
                   default=None,
                   help="original = Uploader's downloadable file (or best available); "
                        "aac = AAC-256k; opus = Opus-72k; "
-                       "mp3 = 128k-MP3. Default: original.")
+                       "mp3 = MP3-128k. Default: original.")
     @click.pass_context
     def cli(ctx, **kwargs):
         return SNDC(ctx, **kwargs)

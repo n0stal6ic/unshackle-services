@@ -4,6 +4,7 @@ from http.cookiejar import CookieJar
 from typing import Any, Optional
 from urllib.parse import urlparse
 import click
+from unshackle.core.cdm.detect import is_widevine_cdm
 from unshackle.core.config import config
 from unshackle.core.credential import Credential
 from unshackle.core.music import MusicTrackOption
@@ -11,7 +12,6 @@ from unshackle.core.service import Service
 from unshackle.core.titles import Music, Song, Titles_T
 from unshackle.core.tracks import Audio, Chapters, Tracks
 from unshackle.core.tracks.track import Track
-
 _INVISIBLE = re.compile(r"[​-‏‪-‮⁠﻿]")
 
 
@@ -27,7 +27,7 @@ class SNDC(Service):
     ALIASES = ("SNDC", "soundcloud", "sc")
     GROUP_AUDIO_DOWNLOADS = True
 
-    TITLE_RE = r"^(?:https?://)?(?:www\.|m\.)?soundcloud\.com/[^\s?#]+"
+    TITLE_RE = r"^(?:https?://)?(?:www\.|m\.|on\.)?soundcloud\.com/[^\s?#]+"
     _PRESET_BITRATE = {
         "aac_hq": 256000, "aac_256k": 256000, "aac_160k": 160000, "aac_96k": 96000,
         "aac_1_0": 128000, "mp3_1_0": 128000, "mp3_0_0": 128000, "mp3_0_1": 64000,
@@ -38,10 +38,11 @@ class SNDC(Service):
     @click.command(name="SNDC", short_help="https://soundcloud.com", help=__doc__)
     @click.argument("title", type=str)
     @click.option("-q", "--quality", "quality",
-                  type=click.Choice(["original", "aac", "mp3"], case_sensitive=False),
+                  type=click.Choice(["original", "aac", "opus", "mp3"], case_sensitive=False),
                   default=None,
-                  help="original = Uploader's file if downloadable else AAC; "
-                       "aac = Best AAC stream (256k on Go+) or mp3 = 128k MP3. Default: original.")
+                  help="original = Uploader's downloadable file (or best available); "
+                       "aac = Best AAC (256k on Go+); opus = Opus ~72k (the app's efficient "
+                       "stream); mp3 = 128k MP3. Default: original.")
     @click.pass_context
     def cli(ctx, **kwargs):
         return SNDC(ctx, **kwargs)
@@ -52,6 +53,7 @@ class SNDC(Service):
         self.quality_pref = (quality or self.config.get("default_quality", "original")).lower()
         self.client_id: Optional[str] = None
         self.oauth_token: Optional[str] = None
+        self.cdm = getattr(ctx.obj, "cdm", None)
 
     def authenticate(self, cookies: Optional[CookieJar] = None, credential: Optional[Credential] = None) -> None:
         super().authenticate(cookies, credential)
@@ -80,9 +82,25 @@ class SNDC(Service):
         if token:
             self.oauth_token = token if token.lower().startswith("oauth ") else token
             self.session.headers["Authorization"] = f"OAuth {token}"
-            self.log.info(" + Authenticated with SoundCloud (OAuth)")
+            self.log.info(" + Authenticated with SoundCloud")
         else:
-            self.log.warning(" - No oauth_token found; Fallback to mp3 128kb/s.")
+            self.log.warning(" - No oauth_token found. Go+ 256k AAC and original downloads "
+                             "unavailable. Using the best fallback stream.")
+
+    def _resolve_short_link(self, url: str) -> str:
+        try:
+            host = urlparse(url if "://" in url else "https://" + url).netloc.lower()
+        except Exception:
+            return url
+        if host == "on.soundcloud.com":
+            try:
+                r = self.session.head(url, allow_redirects=True, timeout=15)
+                if r.url and "soundcloud.com" in r.url and "on.soundcloud.com" not in r.url:
+                    self.log.debug(f" + Resolved short link: {r.url}")
+                    return r.url
+            except Exception as e:
+                self.log.debug(f"Short link resolution failed: {e}")
+        return url
 
     def _extract_client_id(self) -> Optional[str]:
         try:
@@ -115,7 +133,7 @@ class SNDC(Service):
         return resp.json()
 
     def get_titles(self) -> Titles_T:
-        obj = self._api("resolve", params={"url": self.title})
+        obj = self._api("resolve", params={"url": self._resolve_short_link(self.title)})
         kind = obj.get("kind")
 
         if kind == "track":
@@ -127,7 +145,7 @@ class SNDC(Service):
         if kind == "playlist":
             return self._build_playlist(obj)
 
-        self.log.error(f" - Unsupported SoundCloud URL: {kind!r} (Need a track or playlist/album URL).")
+        self.log.error(f" - Unsupported SoundCloud URL: {kind!r}.")
         raise SystemExit(1)
 
     def _build_playlist(self, playlist: dict) -> Music:
@@ -175,6 +193,13 @@ class SNDC(Service):
         pm = track.get("publisher_metadata") or {}
         user = track.get("user") or {}
         title = self._clean(track.get("title")) or "Unknown"
+
+        policy = str(track.get("policy") or "").upper()
+        if policy == "SNIP":
+            self.log.warning(f" - '{title}' is a paid track. Only a 30s preview available.")
+        elif policy == "BLOCK":
+            self.log.warning(f" - '{title}' is region-blocked.")
+
         artist = self._clean(pm.get("artist")) or self._clean(user.get("username")) or "Unknown Artist"
         album = self._clean(album_ctx) or self._clean(pm.get("album_title")) or title
         year = self._year(track) or 1
@@ -243,8 +268,9 @@ class SNDC(Service):
             codec = {"flac": "FLAC", "wav": "WAV", "aiff": "AIFF", "aif": "AIFF", "mp3": "MP3", "m4a": "AAC"}.get(fmt, fmt.upper())
             return [MusicTrackOption(codec=codec, channels=2.0, lossless=codec in ("FLAC", "WAV", "AIFF"),
                                      duration=data.get("duration"), quality_label=self._quality_label(data))]
-        transcoding = self._best_stream_transcoding(data)
-        codec = "MP3" if transcoding and self._tc_codec(transcoding) == "mp3" else "AAC"
+        transcoding, _is_drm = self._pick_stream(data)
+        tc = self._tc_codec(transcoding) if transcoding else "aac"
+        codec = {"mp3": "MP3", "opus": "OPUS", "aac": "AAC"}.get(tc, "AAC")
         bitrate = self._tc_bitrate(transcoding) if transcoding else None
         return [MusicTrackOption(codec=codec, bitrate=bitrate, channels=2.0,
                                  lossless=False, duration=data.get("duration"),
@@ -265,23 +291,33 @@ class SNDC(Service):
                 return Tracks([audio])
             self.log.warning(" - Original download unavailable; falling back to stream.")
 
-        transcoding = self._best_stream_transcoding(data)
+        transcoding, is_drm = self._pick_stream(data)
+
+        if is_drm:
+            drm_audio = self._drm_track(title, track_id, transcoding, data)
+            if drm_audio is not None:
+                return Tracks([drm_audio])
+            self.log.warning(" - DRM stream resolution failed; falling back to a non-DRM stream.")
+            transcoding = self._best_stream_transcoding(data)
+
         if not transcoding:
             self.log.error(f" - No usable stream for track {track_id}."); raise SystemExit(1)
         stream_url = self._resolve_stream(transcoding, data.get("track_authorization"))
-        is_mp3 = self._tc_codec(transcoding) == "mp3"
+        tc = self._tc_codec(transcoding)
         is_progressive = self._tc_progressive(transcoding)
+        codec = {"aac": Audio.Codec.AAC, "opus": Audio.Codec.OPUS}.get(tc)
+        ext = {"aac": "m4a", "mp3": "mp3", "opus": "opus"}.get(tc, "m4a")
         self.log.debug(
             f" + Stream: preset={transcoding.get('preset')} quality={transcoding.get('quality')} "
-            f"protocol={'progressive' if is_progressive else 'hls'}"
+            f"protocol={'progressive' if is_progressive else 'hls'} codec={tc}"
         )
         audio = Audio(
             stream_url, language=title.language or "en",
-            codec=None if is_mp3 else Audio.Codec.AAC,
+            codec=codec,
             bitrate=self._tc_bitrate(transcoding), channels=2,
             descriptor=Track.Descriptor.URL if is_progressive else Track.Descriptor.HLS,
             id_=track_id,
-            data={"ext": "mp3" if is_mp3 else "m4a"},
+            data={"ext": ext},
         )
         return Tracks([audio])
 
@@ -298,6 +334,8 @@ class SNDC(Service):
             if not isinstance(t, dict) or not t.get("url") or not t.get("preset"):
                 continue
             if str(t.get("preset")).lower().startswith("abr_"):
+                continue
+            if "encrypted" in str((t.get("format") or {}).get("protocol") or "").lower():
                 continue
             out.append(t)
         return out
@@ -339,13 +377,13 @@ class SNDC(Service):
         candidates = self._stream_transcodings(data)
         if not candidates:
             return None
-        prefer_mp3 = self.quality_pref == "mp3"
+        priority = {
+            "mp3": {"mp3": 3, "aac": 2, "opus": 1},
+            "opus": {"opus": 3, "aac": 2, "mp3": 1},
+        }.get(self.quality_pref, {"aac": 3, "opus": 2, "mp3": 1})
 
         def codec_pref(t: dict) -> int:
-            codec = self._tc_codec(t)
-            if prefer_mp3:
-                return {"mp3": 3, "aac": 2, "opus": 1}.get(codec, 0)
-            return {"aac": 3, "opus": 2, "mp3": 1}.get(codec, 0)
+            return priority.get(self._tc_codec(t), 0)
 
         def rank(t: dict) -> tuple:
             quality = str(t.get("quality") or "").lower()
@@ -369,6 +407,104 @@ class SNDC(Service):
         if not url:
             self.log.error(f" - No stream URL returned: {res}"); raise SystemExit(1)
         return url
+
+    def _encrypted_transcoding(self, data: dict) -> Optional[dict]:
+        candidates = []
+        for t in (data.get("transcodings") or []):
+            if not isinstance(t, dict) or not t.get("url") or not t.get("preset"):
+                continue
+            if str(t.get("preset")).lower().startswith("abr_"):
+                continue
+            proto = str((t.get("format") or {}).get("protocol") or "").lower()
+            if "encrypted" not in proto:
+                continue
+            candidates.append(t)
+        if not candidates:
+            return None
+
+        def rank(t: dict) -> tuple:
+            proto = str((t.get("format") or {}).get("protocol") or "").lower()
+            return (
+                1 if proto.startswith("ctr") else 0,
+                1 if self._tc_codec(t) == "aac" else 0,
+                self._tc_bitrate(t),
+            )
+
+        return max(candidates, key=rank)
+
+    def _pick_stream(self, data: dict) -> tuple[Optional[dict], bool]:
+        non_drm = self._best_stream_transcoding(data)
+        enc = self._encrypted_transcoding(data) if is_widevine_cdm(self.cdm) else None
+        if enc is not None:
+            if self.quality_pref in ("original", "aac"):
+                if non_drm is None or self._tc_bitrate(enc) > self._tc_bitrate(non_drm):
+                    return enc, True
+            elif non_drm is None:
+                return enc, True
+        return non_drm, False
+
+    def _resolve_encrypted_stream(self, transcoding: dict, track_authorization: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+        params = {}
+        if track_authorization:
+            params["track_authorization"] = track_authorization
+        res = self._api(transcoding["url"], params=params, allow_error=True) or {}
+        url = res.get("url")
+        token = res.get("licenseAuthToken")
+        if not url:
+            self.log.warning(f" - No encrypted stream URL returned: {res}")
+            return None, None
+        return url, token
+
+    def _drm_track(self, title: Song, track_id: str, transcoding: dict, data: dict) -> Optional[Audio]:
+        url, token = self._resolve_encrypted_stream(transcoding, data.get("track_authorization"))
+        if not url or not token:
+            if url and not token:
+                self.log.warning(" - Encrypted stream returned no license token.")
+            return None
+        kbps = self._tc_bitrate(transcoding) // 1000
+        self.log.info(f" + Using DRM stream: AAC {kbps} kb/s. Needs a CDM to decrypt.")
+        return Audio(
+            url,
+            language=title.language or "en",
+            codec=Audio.Codec.AAC,
+            bitrate=self._tc_bitrate(transcoding),
+            channels=2,
+            descriptor=Track.Descriptor.HLS,
+            id_=track_id,
+            data={"ext": "m4a", "license_token": token},
+        )
+
+    def _license_post(self, kind: str, challenge: bytes, track: Any) -> Optional[bytes]:
+        tdata = getattr(track, "data", None)
+        token = tdata.get("license_token") if isinstance(tdata, dict) else None
+        if not token:
+            self.log.error(" - No license token available for the DRM request.")
+            return None
+        host = str(self.config.get("drm_license_host") or "").rstrip("/")
+        if not host:
+            self.log.error(" - No drm_license_host configured."); return None
+        try:
+            resp = self.session.post(
+                f"{host}/playback/{kind}",
+                params={"license_token": token},
+                data=bytes(challenge),
+                headers={"Content-Type": "application/octet-stream", "Accept": "*/*"},
+            )
+        except Exception as e:
+            self.log.error(f" - DRM {kind} request failed: {e}")
+            return None
+        if resp.status_code != 200:
+            self.log.error(f" - DRM {kind} request rejected: {resp.status_code} {resp.text[:200]}")
+            return None
+        return resp.content
+
+    def get_widevine_service_certificate(self, *, challenge: bytes, title: Any = None,
+                                         track: Any = None, **_: Any) -> Optional[bytes]:
+        return self._license_post("widevine", challenge, track) or None
+
+    def get_widevine_license(self, *, challenge: bytes, title: Any = None,
+                             track: Any = None, **_: Any) -> Optional[bytes]:
+        return self._license_post("widevine", challenge, track)
 
     def _original_download(self, track_id: str, data: dict) -> tuple[Optional[str], str]:
         res = self._api(f"tracks/{track_id}/download",
@@ -439,7 +575,7 @@ class SNDC(Service):
     def _quality_label(self, data: dict) -> str:
         if self._will_use_original(data):
             return f"Original {(data.get('original_format') or 'FLAC').upper()}"
-        transcoding = self._best_stream_transcoding(data)
+        transcoding, _is_drm = self._pick_stream(data)
         if not transcoding:
             return ""
         codec = self._tc_codec(transcoding)

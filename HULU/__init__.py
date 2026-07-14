@@ -45,7 +45,7 @@ class HULU(Service):
     @click.option(
         "-mt", "--mpd-type",
         type=click.Choice(["new", "old"], case_sensitive=False),
-        default="old",
+        default="new",
         help="Device profile to request (Old=166, New=210).",
     )
     @click.option("-m", "--movie", is_flag=True, default=False,

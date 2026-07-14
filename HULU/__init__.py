@@ -296,9 +296,14 @@ class HULU(Service):
             manifest_url = playlist["stream_url"]
             self.log.info(f"DASH: {manifest_url}")
 
-            mpd_resp = self.session.get(manifest_url)
-            mpd_resp.raise_for_status()
-            mpd_text = mpd_resp.text
+            try:
+                mpd_resp = self.session.get(manifest_url)
+                mpd_resp.raise_for_status()
+                mpd_text = mpd_resp.text
+            except Exception as e:
+                last_reason = f"failed to fetch {codec} manifest: {e}"
+                self.log.warning(f" - {last_reason}; trying next codec.")
+                continue
 
             if "disney" in manifest_url:
                 mpd_text = self._normalize_ad_markers(mpd_text)

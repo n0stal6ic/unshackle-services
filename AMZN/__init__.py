@@ -89,7 +89,6 @@ def _resolve_subtitle_language(language_code: str, url: str) -> str:
 class AMZN(Service):
     """
     Service code for Amazon VOD (https://amazon.com) & Amazon Prime Video (https://primevideo.com).
-
     www.nostalgic.cc
     Authorization: Credentials, Cookies
     Security: UHD@L1 FHD@Chrome SD@L3

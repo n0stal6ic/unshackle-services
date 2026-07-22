@@ -18,6 +18,7 @@ from unshackle.core.tracks.track import Track
 
 
 class _WebApiAuthError(Exception):
+    """"""
 
 class SPOT(Service):
     """

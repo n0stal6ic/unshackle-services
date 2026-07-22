@@ -109,7 +109,7 @@ class DEZR(Service):
         options = (user.get("USER") or {}).get("OPTIONS") or {}
         user_id = (user.get("USER") or {}).get("USER_ID")
         if not user_id or user_id == 0:
-            self.log.error("Deezer ARL is invalid or expired . Refresh your ARL cookie.")
+            self.log.error("Deezer ARL is invalid or expired. Refresh your ARL.")
             raise SystemExit(1)
 
         self.api_token = user.get("checkForm") or ""
@@ -212,7 +212,7 @@ class DEZR(Service):
         for position, s in enumerate(songs_raw, start=1):
             songs.append(self._build_song(s, {}, playlist_position=position))
         if not songs:
-            self.log.error(f" - No tracks found for playlist {playlist_id}."); raise SystemExit(1)
+            self.log.error(f"No tracks found for playlist {playlist_id}."); raise SystemExit(1)
         return Music(
             songs,
             kind="playlist",
@@ -456,7 +456,7 @@ class DEZR(Service):
             track.path = out_path
             data["dezr_done"] = True
         except Exception as e:
-            self.log.error(f" - Failed to decrypt Deezer track: {e}")
+            self.log.error(f"Failed to decrypt Deezer track: {e}")
             raise
 
     def _blowfish_key(self, sng_id: str) -> bytes:

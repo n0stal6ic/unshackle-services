@@ -18,7 +18,6 @@ from unshackle.core.tracks import Chapter, Tracks
 class PBSK(Service):
     """
     Service code for the PBS Kids streaming service (https://pbskids.org)
-    
     www.nostalgic.cc
     Authorization: None
     Security: FHD@L3

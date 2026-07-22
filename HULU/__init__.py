@@ -20,7 +20,6 @@ from unshackle.core.tracks import Chapter, Subtitle, Tracks, Video
 class HULU(Service):
     """
     Service code for Hulu (https://hulu.com)
-
     www.nostalgic.cc
     Authorization: Cookies
     Geofence: US

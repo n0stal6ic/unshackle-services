@@ -2,6 +2,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+import secrets
 from http.cookiejar import CookieJar
 from typing import Any, Optional
 import click
@@ -69,6 +70,7 @@ class HULU(Service):
         self.license_url_widevine: Optional[str] = None
         self.license_url_playready: Optional[str] = None
         self._playlist: Optional[dict] = None
+        self.device_identifier = secrets.token_hex(16).upper()
 
         try:
             from pyplayready.cdm import Cdm as PlayReadyCdm
@@ -198,6 +200,8 @@ class HULU(Service):
             resp = self.session.post(
                 url=self.config["endpoints"]["manifest"],
                 json={
+                    "device_identifier": self.device_identifier,
+                    "guid": self.device_identifier,
                     "deejay_device_id": deejay_id,
                     "version": version,
                     "all_cdn": False,
@@ -441,7 +445,11 @@ class HULU(Service):
             raise EnvironmentError("Hulu requires cookies for authentication.")
         self.session.cookies.update(cookies)
         self.session.headers.update({
-            "User-Agent": self.config["user_agent"],
+            "User-Agent": self.config.get(
+                "user_agent",
+                "Mozilla/5.0 (Linux; Android 9; AFTMM Build/PS7233; wv) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Version/4.0 Chrome/118.0.0.0 Mobile Safari/537.36",
+            ),
             "Origin": "https://www.hulu.com",
             "Referer": "https://www.hulu.com/",
         })

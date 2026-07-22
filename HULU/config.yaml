@@ -9,6 +9,21 @@ endpoints:
 device_ids:
   new: 210
   old: 166
+  web: 214
+
+web_player:
+  all_cdn: true
+  xlink_support: false
+  limit_ad_tracking: false
+  privacy_opt_out: 'NO'
+  ignore_kids_block: false
+  include_t2_revenue_beacon: '1'
+  include_t2_rev_beacon: true
+  include_t2_adinteraction_beacon: true
+  interface_version: '1.15.1'
+  is_html5_player: true
+  support_js: true
+  support_vpaid: true
 
 codecs:
   video_selection: 'ONE'

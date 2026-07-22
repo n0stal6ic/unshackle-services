@@ -18,6 +18,8 @@ class DEZR(Service):
     """
     Service code for Deezer (https://deezer.com)
     www.nostalgic.cc
+    Authorization: Credentials, ARLs
+    Security: None
     """
 
     ALIASES = ("DEZR", "deezer", "DEEZ")
@@ -51,7 +53,7 @@ class DEZR(Service):
                                     case_sensitive=False),
                   default=None,
                   help="Audio quality (default: config default_quality, or FLAC). "
-                       "FLAC needs a Deezer HiFi subscription; falls back automatically if unavailable.")
+                       "FLAC needs a Deezer HiFi subscription.")
     @click.pass_context
     def cli(ctx, **kwargs):
         return DEZR(ctx, **kwargs)

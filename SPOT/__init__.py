@@ -6,6 +6,9 @@ import time
 from http.cookiejar import CookieJar
 from typing import Any, Optional
 import click
+import requests
+from requests.adapters import HTTPAdapter, Retry
+from requests.exceptions import RetryError
 from pywidevine.pssh import PSSH
 from pywidevine.license_protocol_pb2 import WidevinePsshData
 from unshackle.core.credential import Credential
@@ -18,7 +21,11 @@ from unshackle.core.tracks.track import Track
 
 
 class _WebApiAuthError(Exception):
-    """"""
+    """Raised on API failure."""
+
+class _WebApiRateLimited(Exception):
+    """Raised on Rate-Limit."""
+
 
 class SPOT(Service):
     """
@@ -85,6 +92,7 @@ class SPOT(Service):
         self.client_token: Optional[str] = None
         self.token_expiry: float = 0.0
         self.is_premium: bool = False
+        self._web_api_throttled: bool = False
 
         m = re.search(self.TITLE_RE, self.title)
         if not m:
@@ -110,6 +118,12 @@ class SPOT(Service):
             "app-platform": "WebPlayer",
         })
 
+        self.session.mount(
+            "https://api.spotify.com",
+            HTTPAdapter(max_retries=Retry(total=2, backoff_factor=0.2,
+                                          status_forcelist=[500, 502, 503, 504])),
+        )
+
         self.sp_dc = self._resolve_sp_dc(cookies, credential)
         if not self.sp_dc:
             self.log.error(
@@ -122,7 +136,7 @@ class SPOT(Service):
         self._refresh_token()
         self._check_account()
         self.log.info(
-            f" + Authenticated with Spotify ({'Premium' if self.is_premium else 'Free/Unknown'})"
+            f" + Authenticated with Spotify ({'Premium' if self.is_premium else 'Free'})"
         )
 
     def _resolve_sp_dc(self, cookies: Optional[CookieJar], credential: Optional[Credential]) -> Optional[str]:
@@ -194,8 +208,15 @@ class SPOT(Service):
     def _check_account(self) -> None:
         try:
             resp = self.session.get(f"{self.endpoints['web_api']}/me")
+            if resp.status_code == 429:
+                self._web_api_throttled = True
+                self.log.debug(" - 429 Throttled. Fallback to pathfinder.")
+                return
             if resp.status_code == 200:
                 self.is_premium = resp.json().get("product") == "premium"
+        except RetryError:
+            self._web_api_throttled = True
+            self.log.debug(" - Rate-limited. Metadata will use Pathfinder.")
         except Exception as e:
             self.log.debug(f"Account check failed: {e}")
 
@@ -238,8 +259,17 @@ class SPOT(Service):
         return str(binary % 1_000_000).zfill(6)
 
     def _api(self, path: str, params: Optional[dict] = None) -> dict:
+        if self._web_api_throttled:
+            raise _WebApiRateLimited(f"web-api throttled. Skipping: {path}")
         self._ensure_token()
-        resp = self.session.get(f"{self.endpoints['web_api']}{path}", params=params or {})
+        try:
+            resp = self.session.get(f"{self.endpoints['web_api']}{path}", params=params or {})
+        except RetryError as e:
+            self._web_api_throttled = True
+            raise _WebApiRateLimited(f"429 on {path}") from e
+        if resp.status_code == 429:
+            self._web_api_throttled = True
+            raise _WebApiRateLimited(f"429 on {path}")
         if resp.status_code in (401, 403):
             raise _WebApiAuthError(f"{resp.status_code} on {path}")
         if resp.status_code != 200:
@@ -256,9 +286,14 @@ class SPOT(Service):
     def get_titles(self) -> Titles_T:
         try:
             return self._titles_web()
+        except _WebApiRateLimited as e:
+            self.log.warning(
+                f" - Web API is being rate-limited ({e}). Using pathfinder metadata."
+            )
+            return self._titles_pathfinder()
         except _WebApiAuthError as e:
             self.log.warning(
-                f" - Web API rejected the token ({e}); falling back to Pathfinder metadata."
+                f" - Web API rejected the token ({e}). Using pathfinder metadata."
             )
             return self._titles_pathfinder()
 
@@ -346,11 +381,24 @@ class SPOT(Service):
         sha = self.pathfinder_hashes.get(operation)
         if not sha:
             self.log.error(f" - No Pathfinder hash configured for '{operation}'."); raise SystemExit(1)
-        resp = self.session.post(self.endpoints["pathfinder"], json={
-            "variables": variables,
-            "operationName": operation,
-            "extensions": {"persistedQuery": {"version": 1, "sha256Hash": sha}},
-        })
+        try:
+            resp = self.session.post(self.endpoints["pathfinder"], json={
+                "variables": variables,
+                "operationName": operation,
+                "extensions": {"persistedQuery": {"version": 1, "sha256Hash": sha}},
+            })
+        except RetryError as e:
+            self.log.error(
+                f" - Pathfinder {operation} is also being rate-limited (429). "
+                "Spotify is throttling this IP/token. Wait a while, or route through a proxy/VPN."
+            )
+            raise SystemExit(1) from e
+        if resp.status_code == 429:
+            self.log.error(
+                f" - Pathfinder {operation} is also being rate-limited (429). "
+                "Spotify is throttling this IP/token. Wait a while, or route through a proxy/VPN."
+            )
+            raise SystemExit(1)
         if resp.status_code != 200:
             self.log.error(f" - Pathfinder {operation} failed: {resp.status_code} {resp.text[:200]}")
             raise SystemExit(1)
@@ -484,8 +532,17 @@ class SPOT(Service):
         return names
 
     def _api_absolute(self, url: str) -> dict:
+        if self._web_api_throttled:
+            raise _WebApiRateLimited("API throttled earlier this run.")
         self._ensure_token()
-        resp = self.session.get(url)
+        try:
+            resp = self.session.get(url)
+        except RetryError as e:
+            self._web_api_throttled = True
+            raise _WebApiRateLimited("429 on pagination") from e
+        if resp.status_code == 429:
+            self._web_api_throttled = True
+            raise _WebApiRateLimited("429 on pagination")
         if resp.status_code in (401, 403):
             raise _WebApiAuthError(f"{resp.status_code} on pagination")
         if resp.status_code != 200:
@@ -569,7 +626,38 @@ class SPOT(Service):
             id_=track_id,
             data={"spot_ext": container, "spot_format": fmt},
         )
+        audio.session = self._download_session()
+        self._probe_cdn(stream_url)
         return Tracks([audio])
+
+    def _download_session(self) -> requests.Session:
+        s = requests.Session()
+        ua = self.session.headers.get("user-agent")
+        if ua:
+            s.headers["user-agent"] = ua
+        if self.session.proxies:
+            s.proxies.update(self.session.proxies)
+        return s
+
+    def _probe_cdn(self, url: str) -> None:
+        if getattr(self, "_cdn_probed", False):
+            return
+        self._cdn_probed = True
+        host = url.split("/", 3)[2] if "//" in url else "?"
+        try:
+            r = self._download_session().get(
+                url, headers={"Range": "bytes=0-0"}, stream=True, timeout=(10, 30)
+            )
+            ctype = r.headers.get("Content-Type", "?")
+            r.close()
+            if r.status_code in (200, 206):
+                self.log.info(f" + Audio CDN reachable: HTTP {r.status_code} [{host}] {ctype}")
+            else:
+                self.log.warning(
+                    f" - Audio CDN returned HTTP {r.status_code} on a clean-session [{host}]. "
+                )
+        except Exception as e:
+            self.log.warning(f" - Audio CDN probe errored [{host}]: {e}")
 
     def get_chapters(self, song: Song) -> Chapters:
         return Chapters()
@@ -609,9 +697,9 @@ class SPOT(Service):
 
             stream_url = self._storage_resolve(format_id, file_id)
             if fmt != self.quality:
-                self.log.warning(f" - {self.quality} unavailable/unlicensable for this track. Using: {fmt}.")
+                self.log.warning(f" - {self.quality} unavailable for this track. Using: {fmt}.")
             return fmt, file_id, stream_url, pssh
-        self.log.error(f" - No usable/licensable quality for track {track_id}. {last}")
+        self.log.error(f" - No licensable quality for track {track_id}. {last}")
         raise SystemExit(1)
 
     def _try_license(self, pssh: PSSH) -> Optional[bool]:
@@ -698,7 +786,7 @@ class SPOT(Service):
             raise SystemExit(1)
         return resp.content
 
-    def on_track_downloaded(self, track: Any) -> None:
+    def on_track_decrypted(self, track: Any, drm: Any = None, segment: Any = None) -> None:
         try:
             from pathlib import Path
             data = getattr(track, "data", None)
@@ -713,7 +801,7 @@ class SPOT(Service):
             else:
                 self._remux_flac(track, path)
         except Exception as e:
-            self.log.debug(f"post-download step skipped: {e}")
+            self.log.debug(f"post-decrypt step skipped: {e}")
 
     def _rename_ext(self, track: Any, path, ext: str) -> None:
         if path.suffix.lower() == f".{ext}":
@@ -743,7 +831,7 @@ class SPOT(Service):
         )
         if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
             self.log.warning(
-                f" - FLAC remux failed; keeping the MP4. ffmpeg: {proc.stderr.decode(errors='ignore')[:200]}"
+                f" - FLAC remux failed. ffmpeg: {proc.stderr.decode(errors='ignore')[:200]}"
             )
             if out_path.exists():
                 out_path.unlink()

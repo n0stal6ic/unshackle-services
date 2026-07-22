@@ -18,7 +18,6 @@ from unshackle.core.tracks import Chapters, Tracks
 class PBS(Service):
     """
     Service code for PBS (https://www.pbs.org)
-
     www.nostalgic.cc
     Authorization: Cookies
     Geofence: US

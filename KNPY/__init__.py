@@ -20,7 +20,6 @@ from unshackle.core.tracks import Subtitle, Tracks
 class KNPY(Service):
     """
     Service code for Kanopy (https://kanopy.com).
-    
     www.nostalgic.cc
     Authorization: Cookies, Credentials
     Security: FHD@L3

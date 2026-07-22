@@ -780,11 +780,26 @@ class SPOT(Service):
 
     def get_widevine_license(self, *, challenge: bytes, title: Any, track: Any) -> bytes:
         self._ensure_token()
-        resp = self.session.post(self.endpoints["widevine_license"], data=challenge)
-        if resp.status_code != 200 or not resp.content:
-            self.log.error(f" - Spotify Widevine license error: {resp.status_code} {resp.text[:200]}")
-            raise SystemExit(1)
-        return resp.content
+        resp = None
+        for attempt in range(3):
+            resp = self.session.post(self.endpoints["widevine_license"], data=challenge)
+            if resp.status_code == 200 and resp.content:
+                return resp.content
+            if resp.status_code >= 500:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            break
+        status = resp.status_code if resp is not None else "?"
+        body = (resp.text or "")[:300] if resp is not None else ""
+        has_ct = bool(self.session.headers.get("client-token"))
+        has_auth = bool(self.session.headers.get("authorization"))
+        self.log.error(f" - Spotify Widevine license error: {status} {body}")
+        if isinstance(status, int) and status >= 500:
+            self.log.error(
+                " - A 500 from Spotify's license server is a server-side rejection. "
+                f"(client-token present: {has_ct}, authorization present: {has_auth}.) "
+            )
+        raise SystemExit(1)
 
     def on_track_decrypted(self, track: Any, drm: Any = None, segment: Any = None) -> None:
         try:

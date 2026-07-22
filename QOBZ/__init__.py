@@ -19,7 +19,6 @@ from unshackle.core.tracks.track import Track
 class QOBZ(Service):
     """
     Service code for Qobuz (https://qobuz.com)
-
     www.nostalgic.cc
     Authorization: Credentials, Tokens.
     Security: None

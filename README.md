@@ -15,4 +15,5 @@ Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle).
 | PCOK | [Peacock](https://www.peacocktv.com/) | UHD@L1/SL3K <br> FHD@L3/SL150 | Cookies, Credentials |
 | QOBZ | [Qobuz](https://play.qobuz.com/) | None | Credentials |
 | SNDC | [SoundCloud](https://soundcloud.com/) | AAC@L3/None <br> MP3@None | Cookies |
+| SPOT | [Spotify](https://open.spotify.com/) | FLAC@L1 <br> AAC@L3 | Cookies, Credentials |
 | XUMO | [XUMO Play](https://play.xumo.com/) | None | None |

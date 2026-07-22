@@ -22,7 +22,6 @@ from unshackle.core.tracks import Chapters, Tracks, Video
 class PCOK(Service):
     """
     Service code for Peacock TV (https://peacocktv.com)
-
     www.nostalgic.cc
     Authorization: Cookies, Credentials
     Geofence: US

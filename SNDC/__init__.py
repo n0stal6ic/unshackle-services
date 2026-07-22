@@ -17,8 +17,7 @@ _INVISIBLE = re.compile(r"[​-‏‪-‮⁠﻿]")
 
 class SNDC(Service):
     """
-    Service code for SoundCloud (https://soundcloud.com).
-
+    Service code for SoundCloud (https://soundcloud.com)
     www.nostalgic.cc
     Authorization: Cookies, Credentials
     Security: None

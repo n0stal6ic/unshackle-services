@@ -9,7 +9,7 @@ import time
 import uuid
 from http.cookiejar import CookieJar
 from typing import Any, Optional
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 import click
 import requests
 from pyplayready.system.pssh import PSSH as PlayReadyPSSH
@@ -67,7 +67,7 @@ class AMZM(Service):
             raise SystemExit(1)
 
         regions = self.config.get("regions") or {}
-        region = (region or str(self.config.get("region") or "").strip() or "us").lower()
+        region = self._resolve_region(region, regions)
         if region not in regions:
             self.log.error(f" - Unknown region {region!r}. Choose from: {', '.join(sorted(regions)) or 'none'}")
             raise SystemExit(1)
@@ -86,6 +86,7 @@ class AMZM(Service):
         self.registration_timeout = self.config.get("registration_timeout") or 60
         self.codec_priority = self.config.get("codec_priority") or []
         self.device_id: Optional[str] = None
+        self.customer_id: Optional[str] = None
         self.access_token: Optional[str] = None
         self.video_player_token: Optional[str] = None
         self.session_handoff_token: Optional[str] = None
@@ -93,6 +94,20 @@ class AMZM(Service):
         self._mpd_cache: dict[str, str] = {}
         self.cdm = getattr(ctx.obj, "cdm", None)
         self.is_playready = is_playready_cdm(self.cdm) if self.cdm else False
+
+    def _resolve_region(self, flag: Optional[str], regions: dict) -> str:
+        if flag:
+            return flag.strip().lower()
+
+        by_domain = self.config.get("region_from_domain") or {}
+        host = (urlparse(self.title if "//" in self.title else f"https://{self.title}").hostname or "").lower()
+        from_url = by_domain.get(host.removeprefix("www."))
+        configured = str(self.config.get("region") or "").strip().lower()
+
+        if from_url and configured and from_url != configured:
+            self.log.info(f" + Using region {from_url.upper()} from the URL "
+                          f"(Config says {configured.upper()}). Pass -r to override.")
+        return from_url or configured or "us"
 
     def _endpoint(self, name: str, **extra: str) -> str:
         template = (self.config.get("endpoints") or {}).get(name)
@@ -140,6 +155,16 @@ class AMZM(Service):
         self.territory_id = tokens.get("musicTerritory") or self.territory_id
         self.video_player_token = self._extract_video_player_token(tokens)
 
+        claims = self._player_token_claims(self.video_player_token)
+        self.customer_id = claims.get("customerId")
+        self.device_id = claims.get("deviceId") or self.device_id
+        self.marketplace_id = claims.get("marketplaceId") or self.marketplace_id
+        self.territory_id = claims.get("territoryId") or self.territory_id
+        if claims.get("deviceTypeId") and claims["deviceTypeId"] != self.device_type_id:
+            self.log.debug(f"Registered deviceTypeId is {claims['deviceTypeId']}, "
+                           f"config says {self.device_type_id}; using the registered one")
+            self.device_type_id = claims["deviceTypeId"]
+
         if not self.access_token:
             self.log.error(" - No Amazon Music access token."); raise SystemExit(1)
 
@@ -152,6 +177,26 @@ class AMZM(Service):
 
         self.log.info(f" + Authenticated with Amazon Music ({self.territory_id})")
         self.log.info(f" + DRM: {'PlayReady' if self.is_playready else 'Widevine'}")
+
+    _PLAYER_TOKEN_CLAIMS = ("customerId", "marketplaceId", "territoryId",
+                            "deviceId", "deviceTypeId")
+
+    @classmethod
+    def _player_token_claims(cls, token: Optional[str]) -> dict:
+        if not token or token.count(".") < 2:
+            return {}
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        try:
+            decoded = base64.urlsafe_b64decode(payload.encode()).decode("latin-1", errors="ignore")
+        except Exception:
+            return {}
+        claims = {}
+        for name in cls._PLAYER_TOKEN_CLAIMS:
+            match = re.search(rf'"{name}"\s*:\s*"([^"]+)"', decoded)
+            if match:
+                claims[name] = match.group(1)
+        return claims
 
     def _load_tokens(self) -> Optional[dict]:
         if not self.tokens_path.exists():
@@ -480,6 +525,7 @@ class AMZM(Service):
             json={
                 "deviceToken": {"deviceTypeId": self.device_type_id, "deviceId": self.device_id or ""},
                 "appInfo": {"musicAgent": self._music_agent(asin)},
+                **({"customerId": self.customer_id} if self.customer_id else {}),
                 "contentIdList": [{"identifier": asin, "identifierType": "ASIN"}],
                 "musicDashVersionList": manifest_cfg.get("dash_versions") or [],
                 "contentProtectionList": manifest_cfg.get("content_protection") or [],
@@ -714,6 +760,8 @@ class AMZM(Service):
             "DrmType": drm_type,
             "licenseChallenge": base64.b64encode(challenge_bytes).decode(),
         }
+        if self.customer_id:
+            body["customerId"] = self.customer_id
         if self.session_handoff_token:
             body["sessionHandoffToken"] = self.session_handoff_token
 

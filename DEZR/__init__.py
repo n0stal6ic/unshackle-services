@@ -98,8 +98,9 @@ class DEZR(Service):
         self.arl = self._resolve_arl(cookies, credential)
         if not self.arl:
             self.log.error(
-                "No Deezer ARL found. Provide it via unshackle.yaml credentials as "
-                "'arl:YOUR_ARL' (or 'token:YOUR_ARL'), an 'arl' cookie, or 'arl:' in config.yaml."
+                "No Deezer ARL found. Set it in your unshackle config under "
+                "services: DEZR: arl: \"YOUR_ARL\", or provide an 'arl' "
+                "cookie, or credentials as 'arl:YOUR_ARL'."
             )
             raise SystemExit(1)
 
@@ -137,8 +138,11 @@ class DEZR(Service):
             for cookie in cookies:
                 if cookie.name.lower() == "arl" and cookie.value:
                     return cookie.value
-        cfg_arl = str(self.config.get("arl") or "").strip()
-        return cfg_arl or None
+        for key in ("arl", "token"):
+            value = str(self.config.get(key) or "").strip()
+            if value:
+                return value
+        return None
 
     def _gw(self, method: str, payload: Optional[dict] = None) -> dict:
         resp = self.session.post(
@@ -487,7 +491,7 @@ class DEZR(Service):
     def _cover_url(md5: Optional[str], kind: str = "cover") -> Optional[str]:
         if not md5:
             return None
-        return f"https://e-cdns-images.dzcdn.net/images/{kind}/{md5}/1000x1000-000000-80-0-0.jpg"
+        return f"https://e-cdns-images.dzcdn.net/images/{kind}/{md5}/1400x0-000000-100-0-0.jpg"
 
     @staticmethod
     def _release_kind(album: dict, track_count: Optional[int]) -> str:

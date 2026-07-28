@@ -128,7 +128,7 @@ class SPOT(Service):
         if not self.sp_dc:
             self.log.error(
                 " - No Spotify 'sp_dc' found. Set it in your unshackle config under "
-                "services: SPOT: sp_dc: \"VALUE\" (recommended), or provide an 'sp_dc' "
+                "services: SPOT: sp_dc: \"VALUE\", or provide an 'sp_dc' "
                 "cookie, or credentials as 'sp_dc:VALUE'."
             )
             raise SystemExit(1)

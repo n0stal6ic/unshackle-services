@@ -14,6 +14,7 @@ Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle).
 | PBS | [PBS](https://www.pbs.org/) | None | Cookies |
 | PBSK | [PBS Kids](https://pbskids.org/) | FHD@L3/None | None |
 | PCOK | [Peacock](https://www.peacocktv.com/) | UHD@L1/SL3K <br> FHD@L3/SL150 | Cookies, Credentials |
+| PHLO | [Philo](https://www.philo.com/) | FHD@L3 | Cookies |
 | QOBZ | [Qobuz](https://play.qobuz.com/) | None | Credentials |
 | SNDC | [SoundCloud](https://soundcloud.com/) | AAC@L3/None <br> MP3@None | Cookies |
 | SPOT | [Spotify](https://open.spotify.com/) | FLAC@L1 <br> AAC@L3 | Cookies, Credentials |

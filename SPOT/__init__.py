@@ -127,8 +127,9 @@ class SPOT(Service):
         self.sp_dc = self._resolve_sp_dc(cookies, credential)
         if not self.sp_dc:
             self.log.error(
-                " - No Spotify 'sp_dc' found. Provide it via unshackle.yaml credentials as "
-                "'sp_dc:VALUE' (or 'token:VALUE'), an 'sp_dc' cookie, or 'sp_dc:' in config.yaml."
+                " - No Spotify 'sp_dc' found. Set it in your unshackle config under "
+                "services: SPOT: sp_dc: \"VALUE\" (recommended), or provide an 'sp_dc' "
+                "cookie, or credentials as 'sp_dc:VALUE'."
             )
             raise SystemExit(1)
         self.session.cookies.set("sp_dc", self.sp_dc, domain=".spotify.com")
@@ -153,8 +154,11 @@ class SPOT(Service):
             for cookie in cookies:
                 if cookie.name.lower() == "sp_dc" and cookie.value:
                     return cookie.value
-        cfg = str(self.config.get("sp_dc") or "").strip()
-        return cfg or None
+        for key in ("sp_dc", "token"):
+            value = str(self.config.get(key) or "").strip()
+            if value:
+                return value
+        return None
 
     def _refresh_token(self) -> None:
         server_time_ms = self._server_time_ms()

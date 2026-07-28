@@ -64,19 +64,7 @@ class SNDC(Service):
         self.client_id = self._extract_client_id() or (str(self.config.get("client_id") or "").strip() or None)
         if not self.client_id:
             self.log.error(" - Could not get a SoundCloud client_id."); raise SystemExit(1)
-        token = None
-        if credential:
-            user = (credential.username or "").strip()
-            pw = (credential.password or "").strip()
-            if user.lower() in ("token", "oauth", "oauth_token") and pw:
-                token = pw
-            elif pw and not user:
-                token = pw
-        if not token and cookies:
-            for cookie in cookies:
-                if cookie.name == "oauth_token":
-                    token = cookie.value
-                    break
+        token = self._resolve_token(cookies, credential)
 
         if token:
             self.oauth_token = token if token.lower().startswith("oauth ") else token
@@ -85,6 +73,28 @@ class SNDC(Service):
         else:
             self.log.warning(" - No oauth_token found. Go+ 256k AAC and original downloads "
                              "unavailable. Using the best fallback stream.")
+            self.log.warning("   Set it under services: SNDC: oauth_token: in your unshackle "
+                             "config, or supply an 'oauth_token' cookie.")
+
+    def _resolve_token(self, cookies: Optional[CookieJar], credential: Optional[Credential]) -> Optional[str]:
+        if credential:
+            user = (credential.username or "").strip()
+            pw = (credential.password or "").strip()
+            if user.lower() in ("token", "oauth", "oauth_token", "soundcloud") and pw:
+                return pw
+            if pw and not user:
+                return pw
+            if user and not pw:
+                return user
+        if cookies:
+            for cookie in cookies:
+                if cookie.name.lower() == "oauth_token" and cookie.value:
+                    return cookie.value
+        for key in ("oauth_token", "token"):
+            value = str(self.config.get(key) or "").strip()
+            if value:
+                return value
+        return None
 
     def _resolve_short_link(self, url: str) -> str:
         try:

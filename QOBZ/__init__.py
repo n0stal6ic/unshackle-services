@@ -98,7 +98,11 @@ class QOBZ(Service):
             elif user and not pw:
                 token = None if "@" in user else user
         if not token:
-            token = str(self.config.get("user_auth_token") or "").strip() or None
+            for key in ("user_auth_token", "token", "auth_token"):
+                value = str(self.config.get(key) or "").strip()
+                if value:
+                    token = value
+                    break
         if not token and cookies:
             for cookie in cookies:
                 if cookie.name in ("X-User-Auth-Token", "user_auth_token", "qobuz_token"):
@@ -107,8 +111,9 @@ class QOBZ(Service):
 
         if not token:
             self.log.error(
-                " - No Qobuz auth. In unshackle.yaml credentials, use either "
-                "'token:YOUR_AUTH_TOKEN' or 'email:password'."
+                " - No Qobuz auth. Set it in your unshackle config under "
+                "services: QOBZ: token: \"YOUR_AUTH_TOKEN\", or use "
+                "credentials as 'token:YOUR_AUTH_TOKEN' or 'email:password'."
             )
             raise SystemExit(1)
 

@@ -1,0 +1,33 @@
+user_agent: 'TIDAL_ANDROID/2.38.0 okhttp/4.9.2'
+
+endpoints:
+  device_authorization: 'https://auth.tidal.com/v1/oauth2/device_authorization'
+  token: 'https://auth.tidal.com/v1/oauth2/token'
+  api: 'https://api.tidal.com/v1'
+  sessions: 'https://api.tidal.com/v1/sessions'
+  track_manifests: 'https://openapi.tidal.com/v2/trackManifests/{track_id}'
+  widevine_license: 'https://api.tidal.com/v2/widevine'
+  playready_license: ''
+
+alt_clients:
+  android_auto: ['zU4XHVVkc2tDPo4t', 'VJKhDFqJPqvsPVNBV6ukXTJmwlvbttP7wlMlrc72se4='] # No-Playback?
+  tv_android: ['4N3n6Q1x95LL5K7p', 'oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik='] # CD?
+  fire_tv: ['7m7Ap0JC9j1cOM3n', 'vRAdA108tlvkJpTsGZS8rGZ7xTlbJ0qaZ2K9saEzsgY='] # No-Playback?
+  tv: ['8SEZWa4J1NVC5U5Y', 'owUYDkxddz+9FpvGX24DlxECNtFEMBxipU0lBfrbq60='] # CD?
+  hifi: ['fX2JxdmntZWK0ixT', '1Nm5AfDAjxrgJFJbKNWLeAyKGVGmINuXPPLHVXAvxAg='] # Hi-Res
+
+client: 'hifi'
+
+client_id: ''
+client_secret: ''
+
+refresh_token: ''
+access_token: ''
+
+default_quality: 'HI_RES_LOSSLESS'
+
+default_source: 'auto' # auto, api, web
+
+country_code: 'US'
+
+cover_size: 'origin'

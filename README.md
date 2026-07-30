@@ -18,4 +18,5 @@ Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle).
 | QOBZ | [Qobuz](https://play.qobuz.com/) | None | Credentials |
 | SNDC | [SoundCloud](https://soundcloud.com/) | AAC@L3/None <br> MP3@None | Cookies |
 | SPOT | [Spotify](https://open.spotify.com/) | FLAC@L1 <br> AAC@L3 | Cookies, Credentials |
+| TIDL | [Tidal](https://tidal.com/) | FLAC@L3/None | Credentials |
 | XUMO | [XUMO Play](https://play.xumo.com/) | None | None |

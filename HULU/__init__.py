@@ -3,12 +3,14 @@ import base64
 import hashlib
 import re
 import secrets
+import time
 from http.cookiejar import CookieJar
 from typing import Any, Optional
 import click
 from click.core import ParameterSource
 from langcodes import Language
 from lxml import etree
+from unshackle.core.cacher import Cacher
 from unshackle.core.constants import AnyTrack
 from unshackle.core.credential import Credential
 from unshackle.core.manifests import DASH
@@ -69,7 +71,8 @@ class HULU(Service):
         self.license_url_widevine: Optional[str] = None
         self.license_url_playready: Optional[str] = None
         self._playlist: Optional[dict] = None
-        self.device_identifier = secrets.token_hex(16).upper()
+        self.profile = getattr(ctx.obj, "profile", None)
+        self._device_identifier: Optional[str] = None
 
         try:
             from pyplayready.cdm import Cdm as PlayReadyCdm
@@ -186,6 +189,32 @@ class HULU(Service):
         if Video.Codec.AVC in self.vcodec:
             return ["H264"]
         return ["H265", "H264"]
+
+    def _cookie(self, name: str) -> str:
+        return next((c.value for c in self.session.cookies if c.name == name and c.value), "")
+
+    @property
+    def device_identifier(self) -> str:
+        if self._device_identifier:
+            return self._device_identifier
+
+        uid = self._cookie("_hulu_uid")
+        if uid:
+            salt = self.config["device_ids"]["new"]
+            self._device_identifier = hashlib.sha256(
+                f"{uid}:{self._cookie('_hulu_pgid')}:{salt}".encode()
+            ).hexdigest()
+            return self._device_identifier
+
+        cache = Cacher("HULU").get(f"device_identifier_{self.profile or 'default'}")
+        if cache and cache.data:
+            self._device_identifier = cache.data
+        else:
+            self._device_identifier = secrets.token_hex(32)
+            cache.set(self._device_identifier, int(time.time()) + 60 * 60 * 24 * 3650)
+            self.log.debug(" + No _hulu_uid cookie to derive from.")
+
+        return self._device_identifier
 
     def _request_playlist(self, eab_id: str, codec: str, dynamic_range: str) -> dict:
         deejay_id = (

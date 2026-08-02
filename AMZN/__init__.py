@@ -8,7 +8,7 @@ import secrets
 import string
 import time
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from http.cookiejar import CookieJar
 from typing import Any, Optional
@@ -144,6 +144,10 @@ class AMZN(Service):
     @click.option("-drm", "--drm-system", type=click.Choice(["widevine", "playready"], case_sensitive=False),
                   default="playready",
                   help="which drm system to use")
+    @click.option("-rg", "--region", "region_override", default=None, type=str,
+                  help="Force the account region (e.g. us, gb, de) instead of detecting it from "
+                       "the cookie domain. Use this when detection picks the wrong one, or when "
+                       "your cookie export doesn't carry an amazon/primevideo domain.")
     @click.option("-nr", "--no-true-region", "no_true_region", is_flag=True, default=False,
                   help="Skip the 'true region' playback session (keep-alive) and don't adopt the IP-geo "
                        "marketplace from the configuration endpoint. Session keep-alive is ON by default.")
@@ -161,7 +165,7 @@ class AMZN(Service):
 
     def __init__(self, ctx, title, bitrate: str, player: str, cdn: str, vquality: str, single: bool,
                  amanifest: str, aquality: str, manifest_type: str, drm_system: str,
-                 no_true_region: bool, playlisted: bool, no_device: bool):
+                 region_override: Optional[str], no_true_region: bool, playlisted: bool, no_device: bool):
         super().__init__(ctx)
         self.parse_title(ctx, title)
         self.bitrate = bitrate
@@ -176,6 +180,7 @@ class AMZN(Service):
         self.manifest_type = (manifest_type or "DASH").upper()
         self.manifest_type_source = ctx.get_parameter_source("manifest_type")
         self.drm_system = drm_system
+        self.region_override = (region_override or "").strip().lower() or None
         self.no_true_region = no_true_region
         self.playlisted = playlisted
         self.no_device = no_device
@@ -275,14 +280,12 @@ class AMZN(Service):
         self.configure()
 
     def configure(self) -> None:
-        if len(self.title) > 10:
-            self.pv = True
         self.pv = True
 
         self.log.info("Getting Account Region")
         self.region = self.get_region()
         if not self.region:
-            self.log.error(" - Failed to get Amazon Account region"); raise SystemExit(1)
+            self.log.error(" - Failed to get Amazon Account region."); raise SystemExit(1)
 
         self.log.info(f" + Region: {self.region['code']}")
 
@@ -2000,13 +2003,33 @@ class AMZN(Service):
         return mpd_url
 
     def get_region(self) -> dict:
-        domain_region = self.get_domain_region()
+        regions = self.config["regions"]
+
+        if self.region_override:
+            domain_region = self.region_override
+            self.log.info(f" + Region forced to '{domain_region}' by --region")
+        else:
+            domain_region = self.get_domain_region()
+
         if not domain_region:
+            self.log.error(
+                " - Could not work out the account region from your cookies. No cookie in the jar "
+                "belongs to an amazon.* or primevideo.com domain.\n"
+                "     Re-export cookies while signed in to your Amazon/Prime Video site, or pass "
+                f"--region explicitly (supported: {', '.join(sorted(regions))})."
+            )
             return {}
 
-        region = self.config["regions"].get(domain_region)
+        # A copy: the config dict is shared, and both 'code' and the IP-geo marketplace get written back.
+        region = dict(regions.get(domain_region) or {})
         if not region:
-            self.log.error(f" - There's no region configuration data for the region: {domain_region}"); raise SystemExit(1)
+            self.log.error(
+                f" - No region configuration data for '{domain_region}'.\n"
+                f"     Supported regions: {', '.join(sorted(regions))}.\n"
+                "     Add a block for it under 'regions:' in AMZN/config.yaml, or pass --region "
+                "with the closest supported marketplace."
+            )
+            raise SystemExit(1)
 
         region["code"] = domain_region
 
@@ -2017,34 +2040,57 @@ class AMZN(Service):
                 pv_region = match.group(2).lower()
             else:
                 self.log.error(" - Failed to get PrimeVideo region"); raise SystemExit(1)
+
+            expected = self._pv_stack(region.get("base_manifest", ""))
+            if expected and expected != pv_region:
+                self.log.warning(
+                    f" - PrimeVideo served the '{pv_region}' stack, but a '{domain_region}' account "
+                    f"belongs on '{expected}'. Amazon geo-locates by IP. Playback or licensing could "
+                    f" fail. Use a {domain_region.upper()} IP (--proxy {domain_region})."
+                )
+
             pv_region = {"na": "atv-ps"}.get(pv_region, f"atv-ps-{pv_region}")
             region["base_manifest"] = f"{pv_region}.primevideo.com"
             region["base"] = "www.primevideo.com"
 
         return region
 
+    @staticmethod
+    def _pv_stack(base_manifest: str) -> Optional[str]:
+        match = re.match(r"atv-ps(?:-(eu|fe))?\.", base_manifest or "")
+        return (match.group(1) or "na") if match else None
+
     def get_domain_region(self):
-        tlds = [tldextract.extract(x.domain) for x in self.session.cookies if x.domain_specified]
-        tld = next((x.suffix for x in tlds if x.domain.lower() in ("amazon", "primevideo")), None)
-        if tld:
-            tld = tld.split(".")[-1]
+        suffixes = [
+            tldextract.extract(x.domain).suffix
+            for x in self.session.cookies
+            if tldextract.extract(x.domain).domain.lower() in ("amazon", "primevideo")
+        ]
+        if not suffixes:
+            return None
+
+        counts = Counter(s for s in suffixes if s)
+        tld = counts.most_common(1)[0][0].split(".")[-1] if counts else None
+        if len(counts) > 1:
+            self.log.warning(
+                f" - Cookies span several Amazon domains ({', '.join(sorted(counts))}); "
+                f"picked '.{tld}' as the most common. Use --region if that's wrong."
+            )
         region = {"com": "us", "uk": "gb"}.get(tld, tld)
 
         if region == "us":
             lc_cookie = next(
-                (x.value for x in self.session.cookies
-                 if x.name in ("lc-main-av", "lc-main") and x.domain_specified),
+                (x.value for x in self.session.cookies if x.name in ("lc-main-av", "lc-main") and x.value),
                 None
             )
             if lc_cookie:
-                parts = lc_cookie.replace("-", "_").split("_")
-                if len(parts) >= 2:
-                    country = parts[-1].lower()
-                    if country not in ("us", ""):
-                        mapped = {"uk": "gb"}.get(country, country)
-                        if mapped in self.config.get("regions", {}):
-                            region = mapped
+                country = lc_cookie.replace("-", "_").split("_")[-1].lower()
+                mapped = {"uk": "gb"}.get(country, country)
+                if country not in ("us", "") and mapped in self.config.get("regions", {}):
+                    self.log.debug(f" + Locale cookie '{lc_cookie}' refined the region to '{mapped}'")
+                    region = mapped
 
+        self.log.debug(f" + Region detected from cookie domain '.{tld}': {region}")
         return region
 
     def prepare_endpoint(self, name: str, uri: str, region: dict) -> str:

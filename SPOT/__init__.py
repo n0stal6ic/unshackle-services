@@ -79,7 +79,7 @@ class SPOT(Service):
         self.client_version = self.config.get("client_version") or "1.2.87.27.ga2033a72"
         self.pathfinder_hashes = self.config.get("pathfinder_hashes") or {}
         self.cdm = getattr(getattr(ctx, "obj", None), "cdm", None)
-        self._flac_licensable: Optional[bool] = None
+        self._licensable: dict[str, bool] = {}
 
         if quality:
             self.quality = self.QUALITY_MAP[quality.upper()]
@@ -180,22 +180,43 @@ class SPOT(Service):
             raise SystemExit(1)
         self.token_expiry = float(info.get("accessTokenExpirationTimestampMs", 0)) / 1000 or (time.time() + 3000)
 
-        client_id = info.get("clientId")
-        try:
-            ct = self.session.post(self.endpoints["client_token"], json={
-                "client_data": {
-                    "client_version": self.client_version,
-                    "client_id": client_id,
-                    "js_sdk_data": {},
-                }
-            }, headers={"Accept": "application/json"}).json()
-            self.client_token = ct.get("granted_token", {}).get("token")
-        except Exception as e:
-            self.log.debug(f"client-token fetch failed: {e}")
+        self.client_token = self._request_client_token(info.get("clientId"))
 
         self.session.headers["authorization"] = f"Bearer {self.access_token}"
         if self.client_token:
             self.session.headers["client-token"] = self.client_token
+        else:
+            self.session.headers.pop("client-token", None)
+            self.log.warning(" - No client-token was granted.")
+
+    def _request_client_token(self, client_id: Optional[str]) -> Optional[str]:
+        if not client_id:
+            self.log.warning(" - Token response had no clientId.")
+            return None
+        try:
+            resp = self.session.post(
+                self.endpoints["client_token"],
+                json={
+                    "client_data": {
+                        "client_version": self.client_version,
+                        "client_id": client_id,
+                        "js_sdk_data": {},
+                    }
+                },
+                headers={"accept": "application/json", "authorization": None, "client-token": None},
+            )
+            body = resp.json()
+        except Exception as e:
+            self.log.warning(f" - client-token request failed: {e}")
+            return None
+
+        token = (body.get("granted_token") or {}).get("token")
+        if token:
+            return token
+        self.log.warning(
+            f" - client-token not granted (response_type: {body.get('response_type', '?')})."
+        )
+        return None
 
     def _ensure_token(self) -> None:
         if not self.access_token or time.time() >= self.token_expiry:
@@ -245,7 +266,7 @@ class SPOT(Service):
                 "Set one of them so a web-player token can be generated."
             )
             raise SystemExit(1)
-        resp = self.session.get(url, headers={"authorization": "", "client-token": ""})
+        resp = self.session.get(url, headers={"authorization": None, "client-token": None})
         resp.raise_for_status()
         self._totp_cache = {str(k): v for k, v in resp.json().items()}
         return self._totp_cache
@@ -680,7 +701,7 @@ class SPOT(Service):
             format_id, _c, _l, lossless, prem = self.QUALITIES[fmt]
             if prem and not self.is_premium:
                 continue
-            if lossless and self._flac_licensable is False:
+            if self._licensable.get(fmt) is False:
                 continue
             manifest_key = "file_ids_mp4flac" if lossless else "file_ids_mp4"
             file_id = self._playback_file_id(track_id, manifest_key, format_id)
@@ -689,22 +710,30 @@ class SPOT(Service):
                 continue
 
             pssh = self._build_pssh(file_id)
-            if lossless and self._flac_licensable is None:
+            if fmt not in self._licensable:
                 probe = self._try_license(pssh)
+                if probe is not None:
+                    self._licensable[fmt] = probe
                 if probe is False:
-                    self._flac_licensable = False
-                    self.log.warning(f" - {fmt} isn't licensable with this CDM.")
+                    self.log.warning(f" - {fmt} was refused a license by Spotify.")
                     last = f"{fmt} not licensable"
                     continue
-                if probe is True:
-                    self._flac_licensable = True
 
             stream_url = self._storage_resolve(format_id, file_id)
             if fmt != self.quality:
                 self.log.warning(f" - {self.quality} unavailable for this track. Using: {fmt}.")
             return fmt, file_id, stream_url, pssh
+
         self.log.error(f" - No licensable quality for track {track_id}. {last}")
+        self._log_license_hints()
         raise SystemExit(1)
+
+    def _license_post(self, challenge: bytes):
+        return self.session.post(
+            self.endpoints["widevine_license"],
+            data=challenge,
+            headers={"content-type": "application/octet-stream", "accept": "*/*"},
+        )
 
     def _try_license(self, pssh: PSSH) -> Optional[bool]:
         cdm = self.cdm
@@ -718,7 +747,7 @@ class SPOT(Service):
                 challenge = cdm.get_license_challenge(session_id, pssh, privacy_mode=False)
             except TypeError:
                 challenge = cdm.get_license_challenge(session_id, pssh)
-            resp = self.session.post(self.endpoints["widevine_license"], data=challenge)
+            resp = self._license_post(challenge)
             if resp.status_code in (401, 403):
                 return False
             if resp.status_code != 200 or not resp.content:
@@ -786,24 +815,29 @@ class SPOT(Service):
         self._ensure_token()
         resp = None
         for attempt in range(3):
-            resp = self.session.post(self.endpoints["widevine_license"], data=challenge)
+            resp = self._license_post(challenge)
             if resp.status_code == 200 and resp.content:
                 return resp.content
+            if resp.status_code == 401:
+                self.token_expiry = 0.0
+                self._ensure_token()
+                continue
             if resp.status_code >= 500:
                 time.sleep(1.5 * (attempt + 1))
                 continue
             break
+
         status = resp.status_code if resp is not None else "?"
         body = (resp.text or "")[:300] if resp is not None else ""
-        has_ct = bool(self.session.headers.get("client-token"))
-        has_auth = bool(self.session.headers.get("authorization"))
         self.log.error(f" - Spotify Widevine license error: {status} {body}")
-        if isinstance(status, int) and status >= 500:
-            self.log.error(
-                " - A 500 from Spotify's license server is a server-side rejection. "
-                f"(client-token present: {has_ct}, authorization present: {has_auth}.) "
-            )
+        if status == 403:
+            self._log_license_hints()
+        elif isinstance(status, int) and status >= 500:
+            self.log.error(" - A 5xx is a server-side rejection.")
         raise SystemExit(1)
+
+    def _log_license_hints(self) -> None:
+        self.log.error(" - Spotify refused the license request.")
 
     def on_track_decrypted(self, track: Any, drm: Any = None, segment: Any = None) -> None:
         try:

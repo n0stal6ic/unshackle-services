@@ -1,0 +1,39 @@
+user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0'
+
+api_key: 'sVMTVogE67faKqBLOlZBVoYuay2FquzW'
+client: 'app_version:3.61.0;os:Windows;os_version:10;platform:web'
+
+endpoints:
+  api: 'https://api.fox.com/dtc'
+  entity: '/product/entities/v1/id/{entity_id}?avail_tag=dvr'
+  series: '/product/page/v1/series/detail/{entity_id}?page=1&size=25'
+  episodes: '/product/user/episode/v1/dvreditorial-um/filter?season_id={season_id}&episode_order=asc'
+  playback: 'https://prod.api.digitalvideoplatform.com/foxdtc/v3.0'
+  watchvod: '/watchvod'
+  watchlive: '/watchlive'
+  session_check: 'https://id.fox.com/session/v1/session/check'
+
+ad_segment_markers:
+  - '/creatives/'
+
+platform_location:
+  country: 'US'
+#   zip_code: '46033'
+#   metro_code: '527'
+#   latitude: 39.98
+#   longitude: -86.08
+#   time_zone: '-04:00'
+#   local_station_call_signs: ['WXIN']
+
+device:
+  model: ' WPF Device'
+  os: 'Windows'
+  osv: '10'
+  width: 1920
+  height: 1080
+
+geo_headers: {}
+#   x-fox-dma: '527'
+#   x-fox-zipcode: '46033'
+#   x-fox-home-dma: '613'
+#   x-fox-home-zipcode: '46033'

@@ -1,0 +1,7 @@
+user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+
+endpoints:
+  base: 'https://www.knowledgekids.ca'
+  streaming_access: 'https://www.knowledgekids.ca/services/streaming-access/{node_id}'
+  live_loader: 'https://www.knowledgekids.ca/services/live-stream-loader'
+  jw_manifest: 'https://cdn.jwplayer.com/manifests/{media_id}.m3u8'

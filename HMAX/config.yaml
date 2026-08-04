@@ -1,0 +1,181 @@
+login_order:
+  - 'credential'
+  - 'cookies'
+
+default_device: 'samsungtv'
+
+markets:
+  any: 'default.any-any.prd.api.hbomax.com'
+  amer: 'default.any-amer.prd.api.hbomax.com'
+  emea: 'default.any-emea.prd.api.hbomax.com'
+  neutral: 'default.prd.api.hbomax.com'
+  apac: 'default.any-apac.prd.api.hbomax.com'
+  latam: 'default.any-latam.prd.api.hbomax.com'
+
+endpoints:
+  contentRoutes: 'https://default.prd.api.hbomax.com/cms/routes/%s/%s?include=default'
+  moviePages: 'https://default.prd.api.hbomax.com/content/videos/%s/activeVideoForShow?&include=edit'
+  videoPages: 'https://default.prd.api.hbomax.com/content/videos/%s'
+  showPages: 'https://default.prd.api.hbomax.com/cms/collections/generic-show-page-rail-episodes-tabbed-content?include=default&pf[show.id]=%s&%s'
+  search: 'https://default.prd.api.hbomax.com/search'
+  playbackInfo: 'https://default.prd.api.hbomax.com/any/playback/v1/playbackInfo'
+  bootstrap: 'https://default.prd.api.hbomax.com/session-context/headwaiter/v1/bootstrap'
+
+season_pages:
+  show: 'https://default.prd.api.hbomax.com/cms/collections/generic-show-page-rail-episodes-tabbed-content?include=default&pf[show.id]=%s&%s'
+  mini-series: 'https://default.prd.api.hbomax.com/cms/collections/generic-miniseries-page-rail-episodes?include=default&pf[show.id]=%s&%s'
+  topical: 'https://default.prd.api.hbomax.com/cms/collections/generic-topical-show-page-rail-episodes?include=default&pf[show.id]=%s&%s'
+
+alternate_endpoints:
+  playbackInfoOrchestrator: 'https://default.prd.api.hbomax.com/playback-orchestrator/any/playback-orchestrator/v1/playbackInfo'
+  bootstrapDiscomax: 'https://default.any-any.prd.api.discomax.com/session-context/headwaiter/v1/bootstrap'
+
+drm:
+  include_clearkey: true
+  playready_security_level: 'SL2000'
+
+playback_features:
+  - 'mlp'
+
+license_fallback:
+  widevine: 'https://busy.any-any.prd.api.discomax.com/drm-proxy/any/drm-proxy/drm/license/widevine'
+  playready: 'https://busy.any-any.prd.api.discomax.com/drm-proxy/any/drm-proxy/drm/license/play-ready'
+
+signin_url: 'https://www.hbomax.com/signin'
+
+realm: 'bolt'
+brand_id: 'beam'
+
+headers:
+  Accept: 'application/json, text/plain, */*'
+  Content-Type: 'application/json'
+  x-wbd-preferred-language: 'en-US,en'
+  x-wbd-device-consent: 'gpc=1'
+  Origin: 'https://play.hbomax.com'
+  Referer: 'https://play.hbomax.com/'
+
+x_wbd_time_zone: 'America/New_York'
+ace_region: 'US-WI'
+ace_tier: 'SL'
+ace_flags: '1---'
+
+devices:
+  samsungtv:
+    headers:
+      User-Agent: 'BEAM-Android/1.0.0.104 (SONY/XR-75X95EL)'
+      x-disco-client: 'SAMSUNGTV:124.0.0.0:beam:4.0.0.118'
+      x-disco-params: 'realm=bolt,bid=beam,features=ar'
+      x-device-info: 'beam/4.0.0.118 (Samsung/Samsung-Unknown; Tizen/124.0.0.0; f198a6c1-c582-4725-9935-64eb6b17c3cd/87a996fa-4917-41ae-9b6d-c7f521f0cb78)'
+    playback:
+      appBundle: 'beam'
+      deviceId: '2dec6cb0-eb34-45f9-bbc9-a0533597303c'
+      platform: 'XBOX'
+      deviceType: 'xbox'
+      make: 'Microsoft'
+      model: 'XBOX-Unknown'
+      browser: 'chrome'
+      browserVersion: '113.0.0.0'
+      osName: 'Windows'
+      osVersion: '113.0.0.0'
+      playerSdk: 'Beam Player Console'
+      playerVersion: '1.0.2.4'
+      mediaEngine: 'GLUON_BROWSER'
+      mediaEngineVersion: '1.20.1'
+      width: 1920
+      height: 1080
+
+  shield-4k:
+    headers:
+      User-Agent: 'BEAM-Android/5.0.0 (motorola/moto g(6) play)'
+      x-disco-client: 'ANDROID:9:beam:5.0.0'
+      x-disco-params: 'realm=bolt,bid=beam,features=ar,rr'
+      x-device-info: 'BEAM-Android/5.0.0 (motorola/moto g(6) play; ANDROID/9; %s)'
+    playback:
+      appBundle: 'beam'
+      deviceId: ''
+      platform: 'android'
+      deviceType: 'androidtv'
+      make: 'NVIDIA'
+      model: 'SHIELD Android TV'
+      browser: 'Discovery Player Android androidTV'
+      browserVersion: '1.8.1-canary.102'
+      osName: 'ANDROID'
+      osVersion: '10'
+      playerSdk: 'Discovery Player Android androidTV'
+      playerVersion: '1.8.1-canary.102'
+      mediaEngine: 'exoPlayer'
+      mediaEngineVersion: '1.2.1'
+      width: 3840
+      height: 2160
+      sinkWidth: 3900
+      sinkHeight: 2200
+
+  web:
+    headers:
+      User-Agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/113.0'
+      x-disco-client: 'WEB:NT 10.0:beam:0.0.0'
+      x-disco-params: 'realm=bolt,bid=beam,features=ar'
+      x-device-info: 'beam/0.0.0 (desktop/desktop; Windows/NT 10.0; %s)'
+    playback:
+      appBundle: 'beam'
+      deviceId: ''
+      platform: 'web'
+      deviceType: 'web'
+      make: 'Generic'
+      model: 'Desktop'
+      browser: 'Firefox'
+      browserVersion: '113.0'
+      osName: 'WINDOWS'
+      osVersion: '10.0'
+      playerSdk: 'Beam Player Desktop'
+      playerVersion: '7.8.0'
+      mediaEngine: 'GLUON_BROWSER'
+      mediaEngineVersion: '9.0.0'
+      width: 1920
+      height: 1080
+
+  web-current:
+    headers:
+      User-Agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0'
+      x-disco-client: 'WEB:NT 10.0:hbomax:7.8.0'
+      x-disco-params: 'realm=bolt,bid=beam,features=ar'
+      x-device-info: 'hbomax/7.8.0 (desktop/desktop; Windows/NT 10.0; %s)'
+    playback:
+      appBundle: 'hbomax'
+      deviceId: ''
+      platform: 'WEB'
+      deviceType: 'web'
+      make: 'desktop'
+      model: 'desktop'
+      browser: 'Firefox'
+      browserVersion: '153.0'
+      osName: 'Windows'
+      osVersion: 'NT 10.0'
+      playerSdk: 'Beam Player Desktop'
+      playerVersion: '7.8.0'
+      mediaEngine: 'GLUON_BROWSER'
+      mediaEngineVersion: '9.0.0'
+      width: 1920
+      height: 1080
+
+
+hdr_formats:
+  - 'dolbyvision8'
+  - 'dolbyvision5'
+  - 'dolbyvision'
+  - 'hdr10plus'
+  - 'hdr10'
+  - 'hlg'
+
+strip_before_download:
+  - 'x-wbd-session-state'
+  - 'x-wbd-ace'
+  - 'x-wbd-device-consent'
+  - 'x-wbd-preferred-language'
+  - 'x-wbd-time-zone'
+  - 'x-disco-client'
+  - 'x-disco-params'
+  - 'x-device-info'
+  - 'traceparent'
+  - 'tracestate'
+  - 'Content-Type'

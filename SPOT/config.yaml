@@ -4,6 +4,10 @@ sp_dc: ''
 
 default_quality: 'flac_24'
 
+use_web_api: true
+
+totp_cache_days: 7
+
 totp_secrets_url: 'https://git.gay/thereallo/totp-secrets/raw/branch/main/secrets/secretDict.json'
 
 client_version: '1.2.87.27.ga2033a72'

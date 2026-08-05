@@ -1,10 +1,12 @@
 from __future__ import annotations
 import hmac
 import hashlib
+import json
 import re
 import time
 from http.cookiejar import CookieJar
 from typing import Any, Optional
+from urllib.parse import urlparse
 import click
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -79,7 +81,10 @@ class SPOT(Service):
         self.client_version = self.config.get("client_version") or "1.2.87.27.ga2033a72"
         self.pathfinder_hashes = self.config.get("pathfinder_hashes") or {}
         self.cdm = getattr(getattr(ctx, "obj", None), "cdm", None)
+        self.use_web_api = bool(self.config.get("use_web_api", False))
         self._licensable: dict[str, bool] = {}
+        self._resolved: dict[str, tuple] = {}
+        self._warned_fallback: set[tuple] = set()
 
         if quality:
             self.quality = self.QUALITY_MAP[quality.upper()]
@@ -91,8 +96,10 @@ class SPOT(Service):
         self.access_token: Optional[str] = None
         self.client_token: Optional[str] = None
         self.token_expiry: float = 0.0
-        self.is_premium: bool = False
+        self.is_premium: Optional[bool] = None
+        self.is_anonymous: bool = False
         self._web_api_throttled: bool = False
+        self._service_cert: Optional[bytes] = None
 
         m = re.search(self.TITLE_RE, self.title)
         if not m:
@@ -127,17 +134,22 @@ class SPOT(Service):
         self.sp_dc = self._resolve_sp_dc(cookies, credential)
         if not self.sp_dc:
             self.log.error(
-                " - No Spotify 'sp_dc' found. Set it in your unshackle config under "
-                "services: SPOT: sp_dc: \"VALUE\", or provide an 'sp_dc' "
-                "cookie, or credentials as 'sp_dc:VALUE'."
+                " - No Spotify 'sp_dc' found. Set it in your unshackle config. "
             )
             raise SystemExit(1)
         self.session.cookies.set("sp_dc", self.sp_dc, domain=".spotify.com")
 
         self._refresh_token()
+        if self.is_anonymous:
+            self.log.error(
+                " - Spotify issued an ANONYMOUS token. The sp_dc cookie is missing, expired or invalid. "
+            )
+            raise SystemExit(1)
         self._check_account()
         self.log.info(
-            f" + Authenticated with Spotify ({'Premium' if self.is_premium else 'Free'})"
+            " + Authenticated with Spotify ("
+            + ("Premium" if self.is_premium else "Free" if self.is_premium is False else "Unknown Tier")
+            + ")"
         )
 
     def _resolve_sp_dc(self, cookies: Optional[CookieJar], credential: Optional[Credential]) -> Optional[str]:
@@ -178,6 +190,7 @@ class SPOT(Service):
         if not self.access_token:
             self.log.error(f" - Spotify token request returned no accessToken: {info}")
             raise SystemExit(1)
+        self.is_anonymous = bool(info.get("isAnonymous"))
         self.token_expiry = float(info.get("accessTokenExpirationTimestampMs", 0)) / 1000 or (time.time() + 3000)
 
         self.client_token = self._request_client_token(info.get("clientId"))
@@ -224,13 +237,17 @@ class SPOT(Service):
 
     def _server_time_ms(self) -> int:
         try:
-            resp = self.session.get(self.endpoints["server_time"])
+            resp = self.session.get(self.endpoints["server_time"], timeout=(5, 10))
             resp.raise_for_status()
             return int(1e3 * resp.json()["serverTime"])
-        except Exception:
+        except Exception as e:
+            self.log.debug(f"server-time unavailable ({type(e).__name__}); using local clock")
             return int(time.time() * 1000)
 
     def _check_account(self) -> None:
+        if not self.use_web_api:
+            self.log.debug(" - Skipping. Account tier unknown.")
+            return
         try:
             resp = self.session.get(f"{self.endpoints['web_api']}/me")
             if resp.status_code == 429:
@@ -239,9 +256,14 @@ class SPOT(Service):
                 return
             if resp.status_code == 200:
                 self.is_premium = resp.json().get("product") == "premium"
+                return
+            if resp.status_code in (401, 403):
+                self.log.warning(
+                    f" - /me returned {resp.status_code}; the session may not be logged in."
+                )
         except RetryError:
             self._web_api_throttled = True
-            self.log.debug(" - Rate-limited. Metadata will use Pathfinder.")
+            self.log.debug(" - Rate-limited.")
         except Exception as e:
             self.log.debug(f"Account check failed: {e}")
 
@@ -263,12 +285,67 @@ class SPOT(Service):
         if not url:
             self.log.error(
                 " - No totp secrets url in config. "
-                "Set one of them so a web-player token can be generated."
             )
             raise SystemExit(1)
-        resp = self.session.get(url, headers={"authorization": None, "client-token": None})
-        resp.raise_for_status()
-        self._totp_cache = {str(k): v for k, v in resp.json().items()}
+        cache_file = self.cache_dir / "totp_secrets.json"
+        max_age = float(self.config.get("totp_cache_days", 7)) * 86400
+
+        def _load_cache() -> Optional[dict]:
+            try:
+                if not cache_file.is_file():
+                    return None
+                data = json.loads(cache_file.read_text(encoding="utf-8"))
+                return {str(k): v for k, v in (data or {}).items()} or None
+            except Exception:
+                return None
+
+        cached = _load_cache()
+        if cached is not None:
+            try:
+                age = time.time() - cache_file.stat().st_mtime
+            except OSError:
+                age = max_age + 1
+            if age < max_age:
+                self.log.debug(f" + TOTP secrets from cache ({age / 3600:.1f}h old)")
+                self._totp_cache = cached
+                return self._totp_cache
+
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc:
+            self.session.mount(
+                f"{parsed.scheme}://{parsed.netloc}",
+                HTTPAdapter(max_retries=Retry(total=1, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])),
+            )
+
+        try:
+            resp = self.session.get(
+                url, headers={"authorization": None, "client-token": None}, timeout=(5, 10)
+            )
+            resp.raise_for_status()
+            secrets = {str(k): v for k, v in resp.json().items()}
+            if not secrets:
+                raise ValueError("empty secrets document")
+        except Exception as e:
+            if cached is not None:
+                self.log.warning(
+                    f" - Could not refresh TOTP secrets ({type(e).__name__}). Using the cached copy."
+                )
+                self._totp_cache = cached
+                return self._totp_cache
+            self.log.error(
+                f" - Could not fetch TOTP secrets from {url} ({e}).\n"
+                "   Auth cannot proceed. Pin 'totp_version' and 'totp_secret' in the SPOT config "
+                "to remove this third-party dependency."
+            )
+            raise SystemExit(1)
+
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps(secrets), encoding="utf-8")
+        except Exception as e:
+            self.log.debug(f"could not write TOTP secrets cache: {e}")
+
+        self._totp_cache = secrets
         return self._totp_cache
 
     def _generate_totp(self, timestamp_ms: int) -> str:
@@ -309,6 +386,10 @@ class SPOT(Service):
         return f"{n:032x}"
 
     def get_titles(self) -> Titles_T:
+        if not self.use_web_api and self.item_type != "artist":
+            self.log.debug(" - Web API disabled. Using pathfinder metadata.")
+            return self._titles_pathfinder()
+
         try:
             return self._titles_web()
         except _WebApiRateLimited as e:
@@ -618,7 +699,13 @@ class SPOT(Service):
         )
 
     def get_music_track_options(self, song: Song) -> list[MusicTrackOption]:
-        fmt = self._effective_quality()
+        try:
+            fmt = self._resolve_format(str(song.id))[0]
+        except SystemExit:
+            raise
+        except Exception as e:
+            self.log.debug(f"could not pre-resolve format for {song.id}: {e}")
+            fmt = self._effective_quality()
         _fid, container, label, lossless, _prem = self.QUALITIES[fmt]
         data = song.data if isinstance(song.data, dict) else {}
         if lossless:
@@ -689,17 +776,21 @@ class SPOT(Service):
 
     def _effective_quality(self) -> str:
         fmt = self.quality
-        if self.QUALITIES[fmt][4] and not self.is_premium:
+        if self.QUALITIES[fmt][4] and self.is_premium is False:
             return "AAC_MEDIUM"
         return fmt
 
-    def _resolve_file(self, track_id: str):
+    def _resolve_format(self, track_id: str):
+        cached = self._resolved.get(track_id)
+        if cached:
+            return cached
+
         start = self._effective_quality()
         order = self.FALLBACK_ORDER[self.FALLBACK_ORDER.index(start):]
         last = ""
         for fmt in order:
             format_id, _c, _l, lossless, prem = self.QUALITIES[fmt]
-            if prem and not self.is_premium:
+            if prem and self.is_premium is False:
                 continue
             if self._licensable.get(fmt) is False:
                 continue
@@ -719,14 +810,23 @@ class SPOT(Service):
                     last = f"{fmt} not licensable"
                     continue
 
-            stream_url = self._storage_resolve(format_id, file_id)
-            if fmt != self.quality:
-                self.log.warning(f" - {self.quality} unavailable for this track. Using: {fmt}.")
-            return fmt, file_id, stream_url, pssh
+            if fmt != self.quality and (self.quality, fmt) not in self._warned_fallback:
+                self._warned_fallback.add((self.quality, fmt))
+                self.log.warning(
+                    f" - {self.quality} not offered by Spotify. Using: {fmt}."
+                )
+            self._resolved[track_id] = (fmt, file_id, pssh)
+            return self._resolved[track_id]
 
         self.log.error(f" - No licensable quality for track {track_id}. {last}")
         self._log_license_hints()
         raise SystemExit(1)
+
+    def _resolve_file(self, track_id: str):
+        fmt, file_id, pssh = self._resolve_format(track_id)
+        format_id = self.QUALITIES[fmt][0]
+        stream_url = self._storage_resolve(format_id, file_id)
+        return fmt, file_id, stream_url, pssh
 
     def _license_post(self, challenge: bytes):
         return self.session.post(
@@ -743,12 +843,22 @@ class SPOT(Service):
         session_id = None
         try:
             session_id = cdm.open()
+            cert = self.get_widevine_service_certificate()
+            if cert and hasattr(cdm, "set_service_certificate"):
+                try:
+                    cdm.set_service_certificate(session_id, cert)
+                except Exception as e:
+                    self.log.debug(f"CDM rejected the service certificate: {e}")
+                    cert = None
             try:
-                challenge = cdm.get_license_challenge(session_id, pssh, privacy_mode=False)
+                challenge = cdm.get_license_challenge(session_id, pssh, privacy_mode=bool(cert))
             except TypeError:
                 challenge = cdm.get_license_challenge(session_id, pssh)
             resp = self._license_post(challenge)
             if resp.status_code in (401, 403):
+                self.log.debug(
+                    f"license probe refused: {resp.status_code} {(resp.text or '')[:200]}"
+                )
                 return False
             if resp.status_code != 200 or not resp.content:
                 return None
@@ -782,10 +892,23 @@ class SPOT(Service):
             return None
         media = body.get("media") or {}
         item = (media.get(next(iter(media), "")) or {}).get("item") or body.get("item") or {}
-        files = (item.get("manifest") or {}).get(manifest_key) or []
+        manifest = item.get("manifest") or {}
+        files = manifest.get(manifest_key) or []
         for f in files:
             if str(f.get("format")) == str(format_id):
                 return f.get("file_id")
+
+        offered = ", ".join(
+            f"format={f.get('format')} {f.get('bitrate')}bps "
+            f"{f.get('audio_quality')} hifi={f.get('hifi_status')}"
+            for f in files
+        ) or "(none)"
+        self.log.debug(
+            f" - {manifest_key} has no format {format_id} for {track_id}. Offered: {offered}"
+        )
+        other_keys = [k for k in manifest if k != manifest_key]
+        if other_keys:
+            self.log.debug(f"   other manifest keys present: {', '.join(other_keys)}")
         return None
 
     def _storage_resolve(self, format_id: str, file_id: str) -> str:
@@ -808,7 +931,27 @@ class SPOT(Service):
         wv.protection_scheme = self.PROTECTION_SCHEME_CENC
         return PSSH.new(system_id=PSSH.SystemId.Widevine, init_data=wv.SerializeToString())
 
-    def get_widevine_service_certificate(self, **_: Any) -> None:
+    def get_widevine_service_certificate(self, *, challenge: bytes = b"\x08\x04", **_: Any) -> Optional[bytes]:
+        if self._service_cert is not None:
+            return self._service_cert or None
+
+        self._ensure_token()
+        self._service_cert = b""
+        try:
+            resp = self._license_post(challenge or b"\x08\x04")
+        except Exception as e:
+            self.log.warning(f" - Widevine service certificate request failed: {e}")
+            return None
+
+        if resp.status_code == 200 and resp.content:
+            self._service_cert = resp.content
+            self.log.debug(f" + Got Spotify Widevine service certificate ({len(resp.content)} bytes)")
+            return self._service_cert
+
+        self.log.warning(
+            f" - Spotify returned no service certificate ({resp.status_code}). "
+            "The client ID will be sent unencrypted."
+        )
         return None
 
     def get_widevine_license(self, *, challenge: bytes, title: Any, track: Any) -> bytes:
@@ -838,6 +981,14 @@ class SPOT(Service):
 
     def _log_license_hints(self) -> None:
         self.log.error(" - Spotify refused the license request.")
+        if not self._service_cert:
+            self.log.error(
+                "   No service certificate was obtained. "
+            )
+        else:
+            self.log.error(
+                "   A service certificate was in use and the client ID was encrypted. "
+            )
 
     def on_track_decrypted(self, track: Any, drm: Any = None, segment: Any = None) -> None:
         try:

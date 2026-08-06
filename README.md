@@ -11,6 +11,7 @@ Service scripts for [Unshackle](https://github.com/unshackle-dl/unshackle).
 | FOXO | [FOX One](https://www.fox.com/) | None | Cookies |
 | HMAX | [HBO Max](https://play.hbomax.com/) | UHD@L1/SL3K <br> FHD@L3/SL2K | Cookies, Credentials |
 | HULU | [Hulu](https://www.hulu.com) | UHD@L1/SL3K <br> FHD@L3/SL2K | Cookies |
+| KNCA | [Knowledge Canada](https://www.knowledge.ca/) | None | None |
 | KNKC | [Knowledge Kids Canada](https://www.knowledgekids.ca/) | None | None |
 | KNPY | [Kanopy](https://www.kanopy.com/) | FHD@L3 | Cookies, Credentials |
 | NFBC | [National Film Board <br> of Canada](https://www.nfb.ca/) | None | None |

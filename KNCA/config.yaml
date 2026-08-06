@@ -1,0 +1,9 @@
+headers:
+  User-Agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'  
+
+endpoints:
+  api: 'https://api.knowledge.ca/api/v1'
+  manifest: 'https://cdn.jwplayer.com/manifests/{media_id}.m3u8'
+
+language: 'en'
+knowledge_agent: 'web/3.0.34'

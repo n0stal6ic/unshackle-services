@@ -56,6 +56,7 @@ unshackle/
 |-----|---------|-------|-------|
 | AMZM | [Amazon Music](https://music.amazon.com/) | FLAC@L3/SL2K | Cookies, Credentials |
 | AMZN | [Amazon Prime Video](https://www.primevideo.com/) | UHD@L1 <br> FHD@Chrome <br> SD@L3 | Cookies, Credentials |
+| ANGL | [Angel](https://angel.com/) | None | Cookies |
 | AUDS | [Audius](https://audius.co/) | None | None |
 | DEZR | [Deezer](https://www.deezer.com/) | None | Credentials |
 | FOXO | [FOX One](https://www.fox.com/) | None | Cookies |

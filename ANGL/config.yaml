@@ -1,0 +1,19 @@
+base_url: https://www.angel.com
+api_url: https://api.angelstudios.com
+playback_url: https://tv-apps-bff.product.angelstudios.com
+
+user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0"
+
+endpoints:
+  watch: "{base}/watch/{slug}"
+  video: "{playback}/video"
+
+client:
+  app_name: angel-web
+  app_version: "1.0.0"
+  language: en-US
+  headers:
+    x-max-resolution: RESOLUTION_2160
+    x-max-h264-level: LEVEL_5_2
+    x-max-hevc-level: LEVEL_5_1
+    x-max-audio-channels: CHANNELS_6

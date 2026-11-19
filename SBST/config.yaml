@@ -1,0 +1,11 @@
+user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+
+endpoints:
+  post: "https://{host}/api/v1/posts/{slug}"
+  video_src: "https://{host}/api/v1/video/upload/{video_id}/src"
+
+video_params:
+  type: hls
+
+audio:
+  default_codec: MP3

@@ -71,6 +71,7 @@ unshackle/
 | PCOK | [Peacock](https://www.peacocktv.com/) | UHD@L1/SL3K <br> FHD@L3/SL150 | Cookies, Credentials |
 | PHLO | [Philo](https://www.philo.com/) | FHD@L3 | Cookies |
 | QOBZ | [Qobuz](https://play.qobuz.com/) | None | Credentials |
+| SBST | [Substack](https://substack.com/) | None | Cookies |
 | SNDC | [SoundCloud](https://soundcloud.com/) | AAC@L3/None <br> MP3@None | Cookies |
 | SPOT | [Spotify](https://open.spotify.com/) | FLAC@L1 <br> AAC@Chrome | Cookies, Credentials |
 | TIDL | [Tidal](https://tidal.com/) | FLAC@L3/None | Credentials |
